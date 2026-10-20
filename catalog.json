@@ -1,0 +1,65 @@
+{
+  "schema": 1,
+  "updated": "2026-09-23",
+  "note": "Mirrors the plugin's built-in tables (pricing.ts, policy.ts) as of 'updated'. Edit here to change prices, windows or plans for every install without a new release. Pro excluding fable is an assumption, not confirmed.",
+  "models": {
+    "claude-haiku-4-5": {
+      "line": "haiku",
+      "maxInputTokens": 200000,
+      "price": {
+        "input": 1,
+        "write5m": 1.25,
+        "write1h": 2,
+        "read": 0.1,
+        "output": 5
+      }
+    },
+    "claude-sonnet-5-5": {
+      "line": "sonnet",
+      "maxInputTokens": 1000000,
+      "price": {
+        "input": 2,
+        "write5m": 2.5,
+        "write1h": 4,
+        "read": 0.2,
+        "output": 10
+      }
+    },
+    "claude-opus-5-5": {
+      "line": "opus",
+      "maxInputTokens": 1000000,
+      "price": {
+        "input": 4,
+        "write5m": 5,
+        "write1h": 8,
+        "read": 0.2,
+        "output": 20
+      }
+    },
+    "claude-fable-5-1": {
+      "line": "fable",
+      "maxInputTokens": 1000000,
+      "price": {
+        "input": 10,
+        "write5m": 12.5,
+        "write1h": 20,
+        "read": 0.25,
+        "output": 50
+      }
+    }
+  },
+  "plans": {
+    "pro": {
+      "excludeLines": [
+        "fable"
+      ]
+    },
+    "max": {
+      "excludeLines": []
+    },
+    "api": {
+      "excludeLines": []
+    }
+  },
+  "deciders": {}
+}

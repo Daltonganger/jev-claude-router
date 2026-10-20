@@ -1,6 +1,6 @@
 # Werkdocument: JEV-router voor Claude Code
 
-Status: plan, nog niets gebouwd. Laatst bijgewerkt: 2026-10-20.
+Status: stap 1 gebouwd (zie Volgorde), de rest is plan. Laatst bijgewerkt: 2026-10-20.
 
 Dit document is de lijst van wat we gaan doen, in welke volgorde, en wat we nog
 moeten uitzoeken. Wat hier "gemeten" of "bevestigd" heet, is dat ook; de rest staat
@@ -35,8 +35,8 @@ Voorstel voor de inhoud:
       "maxInputTokens": 1000000,
       // prijs per miljoen tokens; "tiers" voor een hoger tarief boven een drempel
       "price": { "input": "<invullen>", "write5m": "<invullen>", "write1h": "<invullen>", "read": "<invullen>", "output": "<invullen>" },
-      "priceTiers": [{ "abovePromptTokens": 100000, "input": "<invullen>", "output": "<invullen>" }],
-      "plans": ["pro", "max", "api"]
+      // boven deze drempel in prompttokens vervangt dit hele tarief het basistarief
+      "priceTiers": [{ "abovePromptTokens": 100000, "input": "<invullen>", "write5m": "<invullen>", "write1h": "<invullen>", "read": "<invullen>", "output": "<invullen>" }]
     }
   },
   "plans": {
@@ -44,8 +44,9 @@ Voorstel voor de inhoud:
     "max": { "excludeLines": [] },
     "api": { "excludeLines": [] }
   },
+  // model-id's waaronder een beslismodel te bereiken is; nooit een host of sleutel
   "deciders": {
-    "jev": { "latest": "jev-1.14" },
+    "jev": { "latest": "jev-1.14.0" },
     "pplx": { "latest": "pplx-decider-v1.2", "flash": "pplx-decider-flash-v1.2" }
   }
 }
@@ -56,10 +57,11 @@ hier bewust niet: die halen we uit Anthropics prijzenpagina voordat we ze invull
 
 **Ophalen:**
 - Van `https://raw.githubusercontent.com/Daltonganger/jev-claude-router/main/catalog.json`.
-- Cache op schijf, met een TTL van een paar uur, en `ETag` zodat een ongewijzigd bestand
-  niets kost.
-- Vaste URL met omgevingsvariabele `JEV_ROUTER_CATALOG_URL` om te overschrijven
-  (eigen fork, test, lokale kopie via `file://`-pad).
+- Kopie in `$.store`, met een TTL (standaard 6 uur, `JEV_ROUTER_CATALOG_TTL_HOURS`).
+  Een `ETag` kan niet: de fetch van de engine geeft geen headers terug.
+- Na een mislukte poging 10 minuten geen nieuwe, zodat offline starten één timeout kost.
+- `JEV_ROUTER_CATALOG_URL` om te overschrijven (eigen fork). Alleen https, en alleen van
+  `raw.githubusercontent.com` tenzij `JEV_ROUTER_ALLOW_CUSTOM_CATALOG=1`.
 - `JEV_ROUTER_CATALOG=0` zet het ophalen uit.
 
 **Veiligheid.** De catalogus komt van buiten de code en mag daarom alleen *gegevens*
@@ -69,8 +71,8 @@ zetten, nooit gedrag dat een sleutel kan weglekken:
 - Getallen worden begrensd (prijzen ≥ 0 en onder een plafond, windows binnen bereik).
 - De catalogus mag **geen** endpoints, hosts of API-sleutels bevatten of wijzigen. De
   host-allowlist in `provider.ts` blijft in de code.
-- Een afwijking die de prijs van een model meer dan een vaste factor verandert, wordt
-  gemeld in de statusregel in plaats van stil toegepast. (Voorkomt dat een typefout in
+- Een afwijking die de prijs van een model meer dan een vaste factor (4×) verandert, wordt
+  toegepast én gemeld in de statusregel, niet stil toegepast. (Voorkomt dat een typefout in
   `catalog.json` iedereen op de verkeerde tier zet.)
 - Wijzigingen aan `catalog.json` gaan via een pull request of een beschermde branch.
 
@@ -175,9 +177,16 @@ Haiku, Sonnet, Opus en Fable.
 - OpenRouter biedt Jev 1.14 (`typesafe/jev-1.14`, ook `typesafe/jev-1.13`, en de alias
   `~typesafe/jev-latest`) en meer beslismodellen, waaronder Perplexity's Decider.
 - Het System One-endpoint is `https://openrouter.ai/api/v1/systemone`, dus dezelfde
-  verzoekvorm als TypeSafe direct. Daarnaast is er een Decisions-API op
-  `https://openrouter.ai/api/alpha/decisions`; die is "alpha", dus we nemen hem niet als
-  standaard.
+  verzoekvorm als TypeSafe direct.
+- **Decisions-API als optie.** Daarnaast is er een Decisions-API op
+  `https://openrouter.ai/api/alpha/decisions` (en Perplexity heeft er een op
+  `https://api.perplexity.ai/v1/decisions`, zie 5.3). Per route is de API-stijl
+  instelbaar: `systemone` (standaard) of `decisions`, via `JEV_ROUTER_API` en in
+  `catalog.json`. De stijl bepaalt pad, verzoekvorm en hoe het antwoord gelezen wordt;
+  daarna loopt alles door dezelfde `decisionOf`.
+  **Open:** OpenRouter's variant is "alpha", dus de vorm kan veranderen, en ik heb het
+  antwoordformaat niet gezien. Eén echte call vóór we de leeslaag schrijven; tot dan is
+  `systemone` de standaard en `decisions` achter de schakelaar.
 - Eén `openrouter`-backend met een instelbaar model. De lijst van beschikbare
   beslismodellen komt uit OpenRouter; we filteren erop dat het een beslismodel is (het
   moet Choice en Score kunnen beantwoorden). `catalog.json` bepaalt welke we aanraden en
@@ -265,7 +274,10 @@ typedefinities komen van een vaste commit (`npm run types`); controleren of die 
 ## Volgorde
 
 1. `catalog.json` en de lader (ophalen, cache, validatie, terugval). Alles hieronder leunt
-   hierop.
+   hierop. **Gedaan:** `hooks/catalog.ts`, `catalog.json` (spiegel van de ingebouwde
+   tabellen) en `tests/catalog.test.ts`. De lader is nog niet aangesloten op
+   `register.ts`: dat gebeurt in stap 2, waar de gegevens ook gebruikt worden. Een test
+   zorgt dat `catalog.json` en de ingebouwde tabellen niet uit elkaar lopen.
 2. Haiku 5.5 en prijstrappen; `JEV_ROUTER_PLAN` met Fable uit voor Pro.
 3. Sync uit `/v1/models` (modellen, windows, effort).
 4. Provider-laag: eigen host-allowlist, Laya, OpenRouter (5.4), `x_jev_confidence`.

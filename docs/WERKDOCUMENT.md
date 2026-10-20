@@ -189,6 +189,54 @@ Dan is de ladder niet meer beperkt tot Haiku, Sonnet, Opus en Fable. Ideeën:
   (`write1h`, `read`) gaat daar niet vanzelf van uit. Per model aangeven wat het
   ondersteunt, anders geen cache-afweging.
 
+### 5.5 Command Code GOAT en OpenCode Go
+
+Twee abonnementen voor codeeragents die toegang tot (vooral open) modellen doorverkopen.
+Ze horen bij de backends van de router, naast OpenRouter in 5.4. Ik lees "gebruiken voor
+JEV" als: als backend waar de router modellen en eventueel beslissingen kan laten
+draaien. Klopt dat niet, zeg het, dan pas ik dit punt aan.
+
+**Command Code GOAT** ([plan](https://commandcode.ai/docs/plans/goat),
+[provider-API](https://commandcode.ai/docs/provider)):
+- $10 per maand met tegoed (de bronnen noemen $80 én $70; de officiële docs zeggen $80)
+  en volledige API-toegang, afgerekend tegen dat tegoed. Het Go-plan van $1 heeft **geen**
+  API-toegang (403 `upgrade_required`), dus alleen GOAT of hoger.
+- Een eigen API-key van Command Code.
+- Het aantal modellen verschilt per bron (29+, 36+, ongeveer 50); de catalogus leest de
+  lijst uit de provider zelf.
+
+**OpenCode Go** ([docs](https://opencode.ai/docs/go/)):
+- Ongeveer $10 per maand (eerste maand $5, volgens één gids).
+- OpenAI-compatibel: basis-URL `https://opencode.ai/zen/go/v1` met een bearer-token. Een
+  deel van de modellen (zoals MiniMax) gebruikt een ander pad, `/v1/messages`.
+- De modellenlijst haal je op via `/v1/models`; de gidsen verschillen, dus geen vaste lijst
+  in de code.
+- Limieten kunnen veranderen; met een Zen-saldo kan het na het bereiken van de limiet
+  doorlopen in plaats van blokkeren.
+
+**Wat dit betekent voor de plugin:**
+- Beide krijgen een eigen backend in `provider.ts` met hun host in de allowlist (niet via
+  `JEV_ROUTER_ALLOW_CUSTOM_BASE`) en een eigen sleutelvariabele.
+- Het zijn geen Claude-modellen en geen beslismodellen van TypeSafe. Ze zijn bruikbaar als
+  routeringsdoel (zelfde voorbehoud als 5.4b: accepteert Claude Code het model-id, en gaat
+  het verzoek via een gateway) en misschien als beslismodel (een open model dat de tier
+  kiest, vergeleken in 7). Dat tweede moeten we meten, niet aannemen.
+- Prijzen zijn een tegoed of abonnement, geen tarief per token: de kostenberekening toont
+  daar verbruik, zoals bij Pro en Max in 3, en geen dollars.
+- Per model in `catalog.json`: welke backend het levert, of het caching, tools en effort
+  ondersteunt, en het invoerbudget.
+
+**Open:**
+- **Voorwaarden.** Ik vond geen gebruiksvoorwaarden over het gebruik van deze abonnementen
+  buiten hun eigen agent. Een forumdraad over Cursor noemt OpenCode Go in een andere tool
+  als niet ondersteund. Eerst de voorwaarden van beide lezen; het risico is een geblokkeerd
+  account.
+- Gegevensbehandeling: een blog noemt zero-retention voor OpenCode Go, maar dat is niet
+  bevestigd bij de bron. Prompts uit eigen werk gaan hierheen, dus uitzoeken vóór gebruik.
+- Zelf de eindpunten en antwoorden controleren met één echte call per backend. De
+  documentatiepagina van Command Code kon ik hier niet openen, dus de details van zijn API
+  zijn ongezien.
+
 ## 6. Compaction
 
 - Voorlopig Claude's eigen compaction behouden, vanwege Laya's kleinere invoerbudget.
@@ -233,7 +281,8 @@ typedefinities komen van een vaste commit (`npm run types`); controleren of die 
 4. Provider-laag: eigen host-allowlist, Laya, OpenRouter (a), `x_jev_confidence`.
 5. Meetset en benchmark; pas daarna Perplexity en drempels per beslismodel.
 6. Auto-detectie van het plan, na test op de echte client.
-7. OpenRouter als routeringsdoel (b), alleen als de test in 5.4 het toelaat.
+7. OpenRouter als routeringsdoel (b), Command Code GOAT en OpenCode Go (5.5), alleen als de
+   test in 5.4 het toelaat en de voorwaarden van de abonnementen het toestaan.
 8. Compaction per backend.
 
 ## Bronnen
@@ -242,3 +291,5 @@ typedefinities komen van een vaste commit (`npm run types`); controleren of die 
 - Perplexity Decisions API: https://docs.perplexity.ai/docs/decisions/quickstart
 - Artificial Analysis Decision Index: https://benchlm.ai/benchmarks/artificial-analysis-decision-index
 - OpenRouter Decision Model Rankings: https://openrouter.ai/rankings/decisions
+- Command Code GOAT: https://commandcode.ai/docs/plans/goat en https://commandcode.ai/docs/provider
+- OpenCode Go: https://opencode.ai/docs/go/

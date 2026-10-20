@@ -167,75 +167,65 @@ TypeSafe Jev, rechtstreeks of via de Vercel AI Gateway.
 - De prestaties ten opzichte van Jev 1.14 zijn niet vast te stellen uit de bronnen: de
   cijfers zijn deels van Perplexity zelf en spreken elkaar tegen. We meten zelf (zie 7).
 
-### 5.4 Alle modellen van OpenRouter
+### 5.4 Beslismodellen van OpenRouter
 
-Twee verschillende dingen; beide horen erbij.
+Alleen beslismodellen, geen modellen die Claude Code zelf draait. De ladder blijft
+Haiku, Sonnet, Opus en Fable.
 
-**a. OpenRouter als bron van beslismodellen.** Elk beslismodel dat OpenRouter aanbiedt
-(Jev-versies, Perplexity, enz.) wordt een kandidaat. Eén `openrouter`-backend met
-instelbaar model; de lijst van beschikbare beslismodellen komt uit OpenRouter en
-`catalog.json` bepaalt welke we aanraden en met welke drempels.
+- OpenRouter biedt Jev 1.14 (`typesafe/jev-1.14`, ook `typesafe/jev-1.13`, en de alias
+  `~typesafe/jev-latest`) en meer beslismodellen, waaronder Perplexity's Decider.
+- Het System One-endpoint is `https://openrouter.ai/api/v1/systemone`, dus dezelfde
+  verzoekvorm als TypeSafe direct. Daarnaast is er een Decisions-API op
+  `https://openrouter.ai/api/alpha/decisions`; die is "alpha", dus we nemen hem niet als
+  standaard.
+- Eén `openrouter`-backend met een instelbaar model. De lijst van beschikbare
+  beslismodellen komt uit OpenRouter; we filteren erop dat het een beslismodel is (het
+  moet Choice en Score kunnen beantwoorden). `catalog.json` bepaalt welke we aanraden en
+  met welke drempels.
+- Prijs per beslissing is een tarief per token, dus de kosten van de router zelf zijn
+  uit te rekenen en tonen we apart van de kosten van de turn.
 
-**b. OpenRouter-modellen als routeringsdoel (de modellen die Claude Code draait).**
-Dan is de ladder niet meer beperkt tot Haiku, Sonnet, Opus en Fable. Ideeën:
-- Prijzen en `context_length` per model uit de OpenRouter-modellenlijst, automatisch
-  gesynchroniseerd (**te verifiëren:** velden en eenheden van die lijst).
-- Een tier wijst naar een model in `catalog.json` in plaats van naar een vaste id.
-- **Open, en bepalend:** accepteert Claude Code een niet-Claude model-id in de
-  `turn.step`-herschrijving, en gaat het verzoek dan via een gateway (zoals
-  `ANTHROPIC_BASE_URL` naar OpenRouter)? Dat moet op jouw client getest worden. Zo niet,
-  dan is (b) niet mogelijk binnen een plugin en blijft het bij (a).
-- Prompt caching, effort en tool-gedrag verschillen per model; de kostenberekening
-  (`write1h`, `read`) gaat daar niet vanzelf van uit. Per model aangeven wat het
-  ondersteunt, anders geen cache-afweging.
+### 5.5 Jev 1.14 via Command Code GOAT en OpenCode
 
-### 5.5 Command Code GOAT en OpenCode Go
+Ook hier alleen als bron voor het beslismodel, niet als model dat de turn draait.
+Dezelfde Jev 1.14, andere route en sleutel. Handig als je al zo'n abonnement hebt of als
+je een tweede route als terugval wilt (zie 9).
 
-Twee abonnementen voor codeeragents die toegang tot (vooral open) modellen doorverkopen.
-Ze horen bij de backends van de router, naast OpenRouter in 5.4. Ik lees "gebruiken voor
-JEV" als: als backend waar de router modellen en eventueel beslissingen kan laten
-draaien. Klopt dat niet, zeg het, dan pas ik dit punt aan.
-
-**Command Code GOAT** ([plan](https://commandcode.ai/docs/plans/goat),
+**Command Code GOAT** ([model](https://commandcode.ai/models/jev-1-14-0),
 [provider-API](https://commandcode.ai/docs/provider)):
-- $10 per maand met tegoed (de bronnen noemen $80 én $70; de officiële docs zeggen $80)
-  en volledige API-toegang, afgerekend tegen dat tegoed. Het Go-plan van $1 heeft **geen**
-  API-toegang (403 `upgrade_required`), dus alleen GOAT of hoger.
-- Een eigen API-key van Command Code.
-- Het aantal modellen verschilt per bron (29+, 36+, ongeveer 50); de catalogus leest de
-  lijst uit de provider zelf.
+- Model `typesafe/jev-1.14.0` (vastgepind). `typesafe/jev` is een alias en dus niet vast op
+  1.14.0.
+- Endpoint `https://api.commandcode.ai/provider/v1/systemone`, met een Command
+  Code-sleutel.
+- Alleen GOAT en hoger heeft toegang tot de Provider API; het Go-plan van $1 niet.
+- Een open verzoek bij Command Code meldt dat TypeSafe's experimentele afbeeldingsinvoer en
+  het `box`-vraagtype daar nog niet zijn gedocumenteerd. De router gebruikt alleen Choice
+  en Score, dus dat raakt ons niet.
 
-**OpenCode Go** ([docs](https://opencode.ai/docs/go/)):
-- Ongeveer $10 per maand (eerste maand $5, volgens één gids).
-- OpenAI-compatibel: basis-URL `https://opencode.ai/zen/go/v1` met een bearer-token. Een
-  deel van de modellen (zoals MiniMax) gebruikt een ander pad, `/v1/messages`.
-- De modellenlijst haal je op via `/v1/models`; de gidsen verschillen, dus geen vaste lijst
-  in de code.
-- Limieten kunnen veranderen; met een Zen-saldo kan het na het bereiken van de limiet
-  doorlopen in plaats van blokkeren.
+**OpenCode** ([docs](https://opencode.ai/docs/zen/)):
+- Endpoint `https://opencode.ai/inference/systemone/v1/systemone` met een
+  OpenCode-Console-sleutel. De Zen-docs noemen daarnaast
+  `https://opencode.ai/zen/v1/systemone` met model-id `jev-1.13`.
+- **Open:** ik vond geen pagina die Jev 1.14 aan het **Go**-plan koppelt, alleen aan
+  OpenCode's Console en Zen. Of Go de toegang dekt, controleren we vóór we het erin zetten.
 
 **Wat dit betekent voor de plugin:**
-- Beide krijgen een eigen backend in `provider.ts` met hun host in de allowlist (niet via
-  `JEV_ROUTER_ALLOW_CUSTOM_BASE`) en een eigen sleutelvariabele.
-- Het zijn geen Claude-modellen en geen beslismodellen van TypeSafe. Ze zijn bruikbaar als
-  routeringsdoel (zelfde voorbehoud als 5.4b: accepteert Claude Code het model-id, en gaat
-  het verzoek via een gateway) en misschien als beslismodel (een open model dat de tier
-  kiest, vergeleken in 7). Dat tweede moeten we meten, niet aannemen.
-- Prijzen zijn een tegoed of abonnement, geen tarief per token: de kostenberekening toont
-  daar verbruik, zoals bij Pro en Max in 3, en geen dollars.
-- Per model in `catalog.json`: welke backend het levert, of het caching, tools en effort
-  ondersteunt, en het invoerbudget.
+- Alle routes spreken dezelfde System One-taal. Per backend verschillen alleen de
+  basis-URL, het pad, de sleutelvariabele en de model-id. Eén generieke
+  `systemone`-backend die uit `catalog.json` leest welke combinaties bestaan, is genoeg;
+  de hosts staan wel als allowlist in de code (zie 1, Veiligheid).
+- Versie vastpinnen waar het kan (`jev-1.14.0`, `typesafe/jev-1.14`), niet op `latest`:
+  de confidences waar de drempels op zijn afgestemd veranderen mee met een nieuwe release.
+- Calibratie kan per route verschillen, ook voor hetzelfde model (afronding, wrapper).
+  Drempels per route meten (zie 7).
+- Afrekening is een tegoed of abonnement, geen tarief per token.
 
-**Open:**
-- **Voorwaarden.** Ik vond geen gebruiksvoorwaarden over het gebruik van deze abonnementen
-  buiten hun eigen agent. Een forumdraad over Cursor noemt OpenCode Go in een andere tool
-  als niet ondersteund. Eerst de voorwaarden van beide lezen; het risico is een geblokkeerd
-  account.
-- Gegevensbehandeling: een blog noemt zero-retention voor OpenCode Go, maar dat is niet
-  bevestigd bij de bron. Prompts uit eigen werk gaan hierheen, dus uitzoeken vóór gebruik.
-- Zelf de eindpunten en antwoorden controleren met één echte call per backend. De
-  documentatiepagina van Command Code kon ik hier niet openen, dus de details van zijn API
-  zijn ongezien.
+**Open, bij beide:**
+- Gebruiksvoorwaarden: mag je een abonnement gebruiken buiten hun eigen agent, via de
+  Provider-API of Console-sleutel? Lezen vóór gebruik. Gegevensbehandeling hoort daarbij:
+  prompts uit eigen werk gaan naar die dienst. De pagina's van Command Code kon ik hier niet
+  rechtstreeks openen; de details komen uit zoekresultaten.
+- Eén echte call per route om de antwoordvorm te controleren.
 
 ## 6. Compaction
 
@@ -278,11 +268,11 @@ typedefinities komen van een vaste commit (`npm run types`); controleren of die 
    hierop.
 2. Haiku 5.5 en prijstrappen; `JEV_ROUTER_PLAN` met Fable uit voor Pro.
 3. Sync uit `/v1/models` (modellen, windows, effort).
-4. Provider-laag: eigen host-allowlist, Laya, OpenRouter (a), `x_jev_confidence`.
+4. Provider-laag: eigen host-allowlist, Laya, OpenRouter (5.4), `x_jev_confidence`.
 5. Meetset en benchmark; pas daarna Perplexity en drempels per beslismodel.
 6. Auto-detectie van het plan, na test op de echte client.
-7. OpenRouter als routeringsdoel (b), Command Code GOAT en OpenCode Go (5.5), alleen als de
-   test in 5.4 het toelaat en de voorwaarden van de abonnementen het toestaan.
+7. Extra routes voor Jev 1.14 (Command Code GOAT, OpenCode; 5.5), als de voorwaarden het
+   toestaan.
 8. Compaction per backend.
 
 ## Bronnen
@@ -291,5 +281,6 @@ typedefinities komen van een vaste commit (`npm run types`); controleren of die 
 - Perplexity Decisions API: https://docs.perplexity.ai/docs/decisions/quickstart
 - Artificial Analysis Decision Index: https://benchlm.ai/benchmarks/artificial-analysis-decision-index
 - OpenRouter Decision Model Rankings: https://openrouter.ai/rankings/decisions
-- Command Code GOAT: https://commandcode.ai/docs/plans/goat en https://commandcode.ai/docs/provider
-- OpenCode Go: https://opencode.ai/docs/go/
+- Command Code, Jev 1.14.0: https://commandcode.ai/models/jev-1-14-0 en https://commandcode.ai/docs/provider
+- OpenCode: https://opencode.ai/docs/zen/
+- OpenRouter, Jev 1.14: https://openrouter.ai/typesafe/jev-1.14 en https://openrouter.ai/docs/guides/community/jev

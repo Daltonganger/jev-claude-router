@@ -197,7 +197,7 @@ function isValidDecision(v: unknown): v is Decision {
         isCount(v.heldCost.stay) &&
         isCount(v.heldCost.go) &&
         (v.heldCost.limit === undefined || isCount(v.heldCost.limit)))) &&
-    [v.jevFailed, v.heldModel].every((t) => t === undefined || typeof t === "string") &&
+    [v.jevFailed, v.heldModel, v.decider].every((t) => t === undefined || typeof t === "string") &&
     [v.held, v.outgrew, v.wanted].every((t) => t === undefined || (TIERS as readonly unknown[]).includes(t)) &&
     [v.heldEffort, v.cappedEffort].every((t) => t === undefined || (EFFORTS as readonly unknown[]).includes(t))
   );

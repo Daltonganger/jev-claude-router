@@ -1,6 +1,6 @@
 # Werkdocument: JEV-router voor Claude Code
 
-Status: stap 1 tot en met 3 gebouwd (zie Volgorde), de rest is plan. Laatst bijgewerkt: 2026-10-20.
+Status: stap 1 tot en met 4 gebouwd (zie Volgorde), de rest is plan. Laatst bijgewerkt: 2026-10-20.
 
 Dit document is de lijst van wat we gaan doen, in welke volgorde, en wat we nog
 moeten uitzoeken. Wat hier "gemeten" of "bevestigd" heet, is dat ook; de rest staat
@@ -311,6 +311,45 @@ je een tweede route als terugval wilt (zie 9).
   rechtstreeks openen; de details komen uit zoekresultaten.
 - Eén echte call per route om de antwoordvorm te controleren.
 
+### Stand van zaken stap 4
+
+Gebouwd (`hooks/provider.ts`, `hooks/jev.ts`, `hooks/policy.ts`):
+- Routes: `typesafe`, `gateway`, `openrouter`, `commandcode`, `opencode`, `laya`. Elke route heeft een
+  vast adres en een eigen sleutel; die sleutel gaat alleen naar dat adres. Daarmee is de
+  host-allowlist per route in de code vastgelegd (de vlag `JEV_ROUTER_ALLOW_CUSTOM_BASE` geldt nog
+  alleen voor TypeSafe). `LAYA_BASE_URL` is de uitzondering: het adres van je eigen server, https,
+  elke host, zonder login in de URL.
+- OpenRouter, Command Code en OpenCode worden **niet** gekozen op hun sleutel alleen: die sleutels
+  worden ook voor andere dingen gebruikt, en dan zouden alle prompts erheen gaan. Ze worden bij naam
+  gekozen. Laya wordt wel gekozen op `LAYA_BASE_URL` alleen (die variabele is hiervoor).
+- Een lijst in `JEV_ROUTER_PROVIDER` (`laya,openrouter`) wordt op volgorde geprobeerd binnen één
+  tijdsbudget. Een directe fout (geweigerde verbinding, HTTP-fout) geeft de rest van de tijd aan de
+  volgende; een timeout heeft het budget opgemaakt.
+- Laya's `confidence` is een andere grootheid (1 min de genormaliseerde entropie). De router leest
+  `x_jev_confidence` (op elk keuze- en score-antwoord, op Jevs schaal) en nooit `confidence`; ontbreekt
+  die, dan wordt het getal uit de kansen afgeleid. De routeregel noemt Laya bij naam.
+- Laya zonder sleutel wordt zonder `authorization`-header aangeroepen.
+
+Via de echte plugin gecontroleerd (`scripts/probe-plugin-laya.sh`, Claude Code 2.1.306, een stand-in die
+antwoordt als Laya, `FAKE_STYLE=laya`): de eerste beurt toont `Laya 99%`; de tweede vraagt haiku met
+`confidence` 0,99 en `x_jev_confidence` 0,5, en de plugin houdt Sonnet aan met `kept sonnet: Laya 50% on
+haiku, needs 75%`. Zou de router `confidence` lezen, dan was het model naar haiku gegaan.
+
+Nog open:
+- **Veldplaats van `x_jev_confidence`.** De bronnen zeggen dat het op elk `choice`- en `score`-antwoord
+  staat; een voorbeeldantwoord heb ik niet gezien. De router leest het op het antwoordobject zelf
+  (`answers.tier.x_jev_confidence`). Eén echte call naar je Laya bevestigt dat.
+- **Laya's modelnaam.** Het verzoek stuurt `model: "laya"`; of de server daar iets mee doet is
+  onbekend. `JEV_ROUTER_JEV_MODEL` overschrijft het.
+- **OpenCode's modelnaam voor Jev** is niet bevestigd; daarom moet `JEV_ROUTER_JEV_MODEL` er gezet
+  worden.
+- **Drempels per beslismodel** (stap 5): de balk 0,75 en de ondergrenzen zijn op Jev afgestemd en
+  gelden ongewijzigd voor Laya tot ze gemeten zijn.
+- **De Decisions-API** (`/api/alpha/decisions`, `https://api.perplexity.ai/v1/decisions`) is niet
+  gebouwd: het antwoordformaat is niet gezien. Perplexity zelf hoort bij stap 5.
+- **Voorwaarden** van Command Code en OpenCode voor gebruik buiten hun eigen agent zijn niet gelezen;
+  lees ze voor je die routes inzet.
+
 ## 6. Compaction
 
 - Voorlopig Claude's eigen compaction behouden, vanwege Laya's kleinere invoerbudget.
@@ -366,7 +405,8 @@ typedefinities komen van een vaste commit (`npm run types`); controleren of die 
    tabel), anders blijft de router staan en meldt `/jev` dat het uit is. Een late lijst
    verandert niets in de lopende sessie. Een effort die het model niet kent wordt de
    dichtstbijzijnde die het wel kent.
-4. Provider-laag: eigen host-allowlist, Laya, OpenRouter (5.4), `x_jev_confidence`.
+4. Provider-laag: eigen host-allowlist, Laya, OpenRouter (5.4), `x_jev_confidence`. **Gedaan**
+   (hieronder "Stand van zaken stap 4").
 5. Meetset en benchmark; pas daarna Perplexity en drempels per beslismodel.
 6. Auto-detectie van het plan, na test op de echte client.
 7. Extra routes voor Jev 1.14 (Command Code GOAT, OpenCode; 5.5), als de voorwaarden het

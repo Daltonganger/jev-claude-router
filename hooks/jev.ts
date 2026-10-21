@@ -18,7 +18,7 @@
  */
 
 import { EFFORT_CRITERIA, PLAIN_DECIMAL, TIER_CRITERIA, type Tier } from "./policy.ts";
-import type { ProviderResult } from "./provider.ts";
+import type { ProviderOk, ProviderResult, RouteName } from "./provider.ts";
 
 /**
  * Measured against the live gateway on 2026-09-20: ten prompts ran 402ms to
@@ -163,7 +163,7 @@ export type HttpResponseLike = {
  * session can say why a turn went unrouted instead of going quiet.
  */
 export type JevResult =
-  | { ok: true; answers: unknown; ms: number }
+  | { ok: true; answers: unknown; ms: number; via?: RouteName }
   | { ok: false; reason: string; ms: number };
 
 export type AskArgs = {
@@ -298,7 +298,8 @@ export async function askJev(args: AskArgs): Promise<JevResult> {
     fetch(provider.endpoint, {
       method: "POST",
       headers: {
-        authorization: `Bearer ${provider.apiKey}`,
+        // A Laya server on your own network may ask for no key.
+        ...(provider.apiKey === "" ? {} : { authorization: `Bearer ${provider.apiKey}` }),
         "content-type": "application/json",
       },
       body: JSON.stringify(body),
@@ -365,10 +366,42 @@ export async function askJev(args: AskArgs): Promise<JevResult> {
     if (typeof parsed !== "object" || parsed === null || !parsed.answers) {
       return { ok: false, reason: "response carried no answers", ms: since() };
     }
-    return { ok: true, answers: parsed.answers, ms: since() };
+    return { ok: true, answers: parsed.answers, ms: since(), via: provider.name };
   } catch {
     return { ok: false, reason: "response was not JSON", ms: since() };
   }
+}
+
+export type ChainArgs = Omit<AskArgs, "provider"> & { providers: readonly ProviderOk[] };
+
+/**
+ * Asks each provider in turn until one answers. They share one budget: a
+ * provider that fails at once (a refused connection, an HTTP error) leaves
+ * the rest of the time to the next; one that times out has spent it, and
+ * the turn goes unrouted. A turn ceded to a newer copy stops the chain.
+ */
+export async function askJevChain(args: ChainArgs): Promise<JevResult> {
+  const now = args.now ?? (() => Date.now());
+  const started = now();
+  const budget = args.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const failures: { name: string; reason: string }[] = [];
+  for (const provider of args.providers) {
+    const left = budget - (now() - started);
+    if (left < MIN_TIMEOUT_MS) break;
+    const result = await askJev({ ...args, provider, timeoutMs: left });
+    if (result.ok) return { ...result, ms: now() - started };
+    if (result.reason === "ceded") return { ...result, ms: now() - started };
+    failures.push({ name: provider.name, reason: result.reason });
+    if (result.reason.startsWith("timed out")) break;
+  }
+  // One provider says what it said; several say which said what.
+  const reason =
+    failures.length === 0
+      ? "no provider"
+      : args.providers.length === 1
+        ? failures[0]!.reason
+        : failures.map((f) => (f.reason.startsWith(f.name) ? f.reason : `${f.name}: ${f.reason}`)).join("; then ");
+  return { ok: false, reason, ms: now() - started };
 }
 
 /** The provider's own error type, when it sent one, for the status line. */

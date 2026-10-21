@@ -5,6 +5,10 @@
  * the effort score (low … max; 2 by default). `[[c=0.3]]` sets the effort
  * confidence (0.99 by default); the tier's confidence is always 0.99.
  *
+ * With FAKE_STYLE=laya it answers as a Laya server does: `confidence` is a
+ * different quantity (0.99 here, whatever the choice), and the Jev-scale number
+ * is `x_jev_confidence` (`[[x=0.5]]` sets the tier's; 0.99 by default).
+ *
  *   node scripts/fake-jev.mjs <dir>     # <dir> holds key.pem and cert.pem; writes <dir>/jev.log
  */
 import https from "node:https";
@@ -33,6 +37,9 @@ https
       const score = e ? Number(e[1]) : 2;
       const c = /\[\[c=([\d.]+)\]\]/.exec(state);
       const effortConfidence = c ? Number(c[1]) : 0.99;
+      const x = /\[\[x=([\d.]+)\]\]/.exec(state);
+      const tierX = x ? Number(x[1]) : 0.99;
+      const laya = process.env.FAKE_STYLE === "laya";
       const offered = Object.keys(body.questions?.tier?.criteria ?? {});
       log({ url: req.url, tier, score, offered, state: state.slice(0, 80) });
       const probs = Object.fromEntries(offered.map((o) => [o, o === tier ? 0.99 : 0.01 / Math.max(1, offered.length - 1)]));
@@ -40,8 +47,12 @@ https
       res.end(
         JSON.stringify({
           answers: {
-            tier: { type: "choice", choice: tier, confidence: 0.99, probabilities: probs },
-            effort: { type: "score", score, confidence: effortConfidence },
+            tier: laya
+              ? { type: "choice", choice: tier, confidence: 0.99, x_jev_confidence: tierX, probabilities: probs }
+              : { type: "choice", choice: tier, confidence: 0.99, probabilities: probs },
+            effort: laya
+              ? { type: "score", score, confidence: 0.99, x_jev_confidence: effortConfidence }
+              : { type: "score", score, confidence: effortConfidence },
           },
         }),
       );

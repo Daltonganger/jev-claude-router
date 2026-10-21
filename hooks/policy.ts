@@ -25,6 +25,8 @@ export type Decision = {
   effort: Effort;
   /** Jev's confidence in the tier, 0 to 1. The gateway rounds to 2 places. */
   confidence: number;
+  /** Who answered, when it was not Jev (Laya), for the route line. Absent for Jev. */
+  decider?: string;
   /**
    * Jev's confidence in the effort score, separately. Measured 2026-09-22:
    * the two move independently (tier 0.81 with effort 0.49 on the same
@@ -277,6 +279,13 @@ export function effortOf(score: unknown): Effort {
 export function decisionOf(
   answers: unknown,
   offered: readonly Tier[] = TIERS,
+  /**
+   * Which confidence the answer is read for (see `confidenceSourceOf`): `jev`
+   * reads `confidence`; `x_jev` reads `x_jev_confidence` and never `confidence`.
+   */
+  source: "jev" | "x_jev" = "jev",
+  /** Who answered, when it is not Jev, for the route line. */
+  decider?: string,
 ): Decision | null {
   if (!isRecord(answers)) return null;
 
@@ -293,24 +302,23 @@ export function decisionOf(
   // one that is not — a provider that ever sends something outside that
   // range (measured possible, not measured live) would otherwise route on
   // it live and then have the whole Decision silently dropped on restore.
-  const confidenceOf = (v: unknown) =>
-    typeof v === "number" && Number.isFinite(v)
-      ? Math.min(1, Math.max(0, v))
-      : 0;
+  // The answer's own number, in the sense `source` names, or undefined.
+  const readConfidence = (answer: object): number | undefined => {
+    const v = (answer as Record<string, unknown>)[source === "x_jev" ? "x_jev_confidence" : "confidence"];
+    return typeof v === "number" && Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : undefined;
+  };
 
   const probabilities = probabilitiesOf(tier.probabilities, offered);
-  const confidence =
-    typeof tier.confidence === "number" && Number.isFinite(tier.confidence)
-      ? Math.min(1, Math.max(0, tier.confidence))
-      : confidenceFrom(probabilities, offered.length, choice as Tier);
+  const confidence = readConfidence(tier) ?? confidenceFrom(probabilities, offered.length, choice as Tier);
 
   return {
     tier: choice as Tier,
     model: MODEL_OF[choice as Tier],
     effort: effortOf(isRecord(effort) ? effort.score : undefined),
     confidence,
-    effortConfidence: confidenceOf(isRecord(effort) ? effort.confidence : 0),
+    effortConfidence: isRecord(effort) ? (readConfidence(effort) ?? 0) : 0,
     ...(probabilities !== undefined ? { probabilities } : {}),
+    ...(decider !== undefined ? { decider } : {}),
   };
 }
 
@@ -470,6 +478,7 @@ export function stickyDecision(
     // Sonnet effort gating reads this next; dropping it made every held
     // Sonnet turn look like effort confidence 0 and always hold effort.
     effortConfidence: fresh.effortConfidence,
+    ...(fresh.decider !== undefined ? { decider: fresh.decider } : {}),
     ...(fresh.probabilities !== undefined
       ? { probabilities: fresh.probabilities }
       : {}),

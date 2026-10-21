@@ -46,7 +46,7 @@ import { sameModelAs,
   fitsWindow,
   type Ttl,
 } from "./pricing.ts";
-import type { ProviderResult } from "./provider.ts";
+import { confidenceSourceOf, labelOf, type ProviderResult } from "./provider.ts";
 import { compactionLine, type Compaction } from "./compactor.ts";
 
 /**
@@ -108,6 +108,17 @@ export type AgentTag = {
   label: string;
 };
 
+/**
+ * How an answer is read, from the route that gave it: which confidence, and
+ * who to name on the route line when it is not Jev. The arguments after
+ * `offered` in `decisionOf`.
+ */
+function answeredVia(result: { via?: Parameters<typeof labelOf>[0] }): ["jev" | "x_jev", string | undefined] {
+  if (result.via === undefined) return ["jev", undefined];
+  const label = labelOf(result.via);
+  return [confidenceSourceOf(result.via), label === "Jev" ? undefined : label];
+}
+
 /** Percent, rounded, for a confidence. */
 const pct = (n: number) => `${Math.round(n * 100)}%`;
 
@@ -134,7 +145,7 @@ export function reasonsOf(attempt: Attempt): string[] {
             (d.heldCost.limit !== undefined
               ? `, over the ${usd(d.heldCost.limit)} limit`
               : "")
-          : `kept ${kept}: Jev ${pct(d.confidence)} on ${wanted}` +
+          : `kept ${kept}: ${d.decider ?? "Jev"} ${pct(d.confidence)} on ${wanted}` +
             (d.heldBar !== undefined ? `, needs ${pct(d.heldBar)}` : ""),
     );
   }
@@ -150,7 +161,7 @@ export function reasonsOf(attempt: Attempt): string[] {
   // Sonnet only: an effort change there re-caches half the prefix.
   if (d.heldEffort !== undefined) {
     out.push(
-      `kept ${d.effort}: Jev ${pct(d.effortConfidence ?? 0)} on ${d.heldEffort}`,
+      `kept ${d.effort}: ${d.decider ?? "Jev"} ${pct(d.effortConfidence ?? 0)} on ${d.heldEffort}`,
     );
   }
   if (d.forced) out.push(pickOf(d));
@@ -480,6 +491,8 @@ export type Status = {
   cold?: boolean;
   surface: string | null;
   provider: ProviderResult;
+  /** Every provider, in the order they are tried; absent on older callers. */
+  providers?: readonly string[];
   timeoutMs: number;
   /** The confidence a switch must clear, or null when stickiness is off. */
   sticky: number | null;
@@ -615,7 +628,7 @@ export function attemptOf(
     return { ...head, ms: result.ms, skipped: result.reason };
   }
 
-  const fresh = result.ok ? decisionOf(result.answers, offered) : null;
+  const fresh = result.ok ? decisionOf(result.answers, offered, ...answeredVia(result)) : null;
   let decision = forced !== null ? forcedDecision(forced, fresh) : fresh;
   if (!decision) {
     return {
@@ -661,6 +674,7 @@ export function attemptOf(
             model: MODEL_OF[step],
             effort: decision.effort,
             confidence: decision.confidence,
+            ...(decision.decider !== undefined ? { decider: decision.decider } : {}),
             ...(decision.effortConfidence !== undefined
               ? { effortConfidence: decision.effortConfidence }
               : {}),
@@ -881,7 +895,7 @@ export function spawnAttemptOf(
 ): Attempt {
   const head = { prompt: kept(description), kind: "agent" as const, agent };
   if (!result.ok) return { ...head, ms: result.ms, skipped: result.reason };
-  const fresh = decisionOf(result.answers, offered);
+  const fresh = decisionOf(result.answers, offered, ...answeredVia(result));
   if (!fresh) {
     return {
       ...head,
@@ -894,7 +908,7 @@ export function spawnAttemptOf(
     return {
       ...head,
       ms: result.ms,
-      skipped: `Jev ${pct(fresh.confidence)} on ${fresh.tier}, needs ${pct(SUBAGENT_CONFIDENCE)}`,
+      skipped: `${fresh.decider ?? "Jev"} ${pct(fresh.confidence)} on ${fresh.tier}, needs ${pct(SUBAGENT_CONFIDENCE)}`,
     };
   }
   return { ...head, ms: result.ms, decision: capTo(decision, ceiling) };
@@ -920,7 +934,7 @@ function sureOf(d: Decision, kind?: Attempt["kind"], continued?: boolean): strin
   if (kind === "continue" || kind === "nudge") return "";
   if (d.forced && d.confidence === 0) return "";
   if (d.jevFailed !== undefined) return "";
-  return `Jev ${pct(d.confidence)}`;
+  return `${d.decider ?? "Jev"} ${pct(d.confidence)}`;
 }
 
 /** `opus-5-5` for `claude-opus-5-5-20260901`: the id without its prefix and date. */
@@ -1157,13 +1171,22 @@ export function statusReport(status: Status): string {
   lines.push(`  surface   ${status.surface === null ? "unknown" : plain(status.surface)}`);
 
   if (status.provider.ok) {
-    const key =
-      status.provider.name === "typesafe"
-        ? "TYPESAFE_API_KEY"
-        : "AI_GATEWAY_API_KEY";
+    const key = {
+      typesafe: "TYPESAFE_API_KEY",
+      gateway: "AI_GATEWAY_API_KEY",
+      openrouter: "OPENROUTER_API_KEY",
+      commandcode: "COMMANDCODE_API_KEY",
+      opencode: "OPENCODE_API_KEY",
+      laya: "LAYA_BASE_URL",
+    }[status.provider.name];
     lines.push(
-      `  provider  ${status.provider.name} · ${key} is set · ${plain(status.provider.model)}`,
+      `  provider  ${status.provider.name} · ${key} is set · ${plain(status.provider.model)}` +
+        (status.provider.name === "laya"
+          ? ` · confidence read from x_jev_confidence`
+          : ""),
     );
+    if (status.providers !== undefined && status.providers.length > 1)
+      lines.push(`  fallback  ${status.providers.join(" → ")} (the next is asked when one fails at once)`);
   } else {
     // The reason names the fix: a missing key, a bad base URL, a provider
     // forced without its key. "No keys" alone sent people after the wrong one.
@@ -1200,7 +1223,7 @@ export function statusReport(status: Status): string {
         status.compactOn
           ? `${
               status.provider.ok && status.provider.name !== "typesafe"
-                ? "on, but the gateway cannot score tool calls (needs TypeSafe direct): the engine summarises"
+                ? `on, but ${status.provider.name === "gateway" ? "the gateway" : `the ${status.provider.name} route`} cannot score tool calls (needs TypeSafe direct): the engine summarises`
                 : "on, Jev prunes tool calls"
             }${status.compaction ? ` · last: ${compactionLine(status.compaction)}` : ""}`
           : "off (/jev compact on)"

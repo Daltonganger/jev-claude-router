@@ -1062,3 +1062,44 @@ describe("models taken from the model list", () => {
     assert.equal(fine.cappedEffort, undefined);
   });
 });
+
+describe("decisionOf reads the confidence a route means", () => {
+  const laya = {
+    tier: { type: "choice", choice: "sonnet", confidence: 0.2, x_jev_confidence: 0.9, probabilities: { haiku: 0.02, sonnet: 0.95, opus: 0.02, fable: 0.01 } },
+    effort: { type: "score", score: 2, confidence: 0.1, x_jev_confidence: 0.8 },
+  };
+
+  test("Laya's own confidence is not Jev's: x_jev_confidence is read, for the tier and the effort", () => {
+    const d = decisionOf(laya, TIERS, "x_jev", "Laya");
+    assert.equal(d?.confidence, 0.9);
+    assert.equal(d?.effortConfidence, 0.8);
+    assert.equal(d?.decider, "Laya");
+  });
+
+  test("a Laya answer without it is derived from the probabilities, never from `confidence`", () => {
+    const { x_jev_confidence: _t, ...tier } = laya.tier;
+    const { x_jev_confidence: _e, ...effort } = laya.effort;
+    const d = decisionOf({ tier, effort }, TIERS, "x_jev");
+    assert.equal(d?.confidence, confidenceFrom({ haiku: 0.02, sonnet: 0.95, opus: 0.02, fable: 0.01 }, 4, "sonnet"));
+    assert.notEqual(d?.confidence, 0.2);
+    assert.equal(d?.effortConfidence, 0, "no x_jev_confidence on the effort: none, not 0.1");
+  });
+
+  test("Jev's answers are read as before, and x_jev_confidence is ignored there", () => {
+    const d = decisionOf(laya, TIERS);
+    assert.equal(d?.confidence, 0.2);
+    assert.equal(d?.effortConfidence, 0.1);
+    assert.equal(d?.decider, undefined);
+  });
+
+  test("a value outside 0..1 or not a number is clamped or ignored, as for Jev", () => {
+    const d = decisionOf({ tier: { type: "choice", choice: "sonnet", x_jev_confidence: 7 }, effort: { type: "score", score: 1, x_jev_confidence: "high" } }, TIERS, "x_jev");
+    assert.equal(d?.confidence, 1);
+    assert.equal(d?.effortConfidence, 0);
+  });
+
+  test("Laya's x_jev_confidence on two options is the share above half, rescaled: 0.8 → 0.6", () => {
+    const d = decisionOf({ tier: { type: "choice", choice: "haiku", probabilities: { haiku: 0.8, sonnet: 0.2 } } }, ["haiku", "sonnet"], "x_jev");
+    assert.ok(Math.abs((d?.confidence ?? 0) - 0.6) < 1e-9);
+  });
+});

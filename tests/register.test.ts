@@ -49,6 +49,10 @@ function load(
   let modelsReply: unknown = "down";
   let modelsFetches = 0;
   let modelsKeySent: string | undefined;
+  /** Every routing request: where it went, and the authorization it carried. */
+  const asked: { url: string; authorization: string | undefined }[] = [];
+  /** Hosts whose routing requests fail with an HTTP error. */
+  const failingHosts = new Set<string>();
 
   // Most register tests assume sticky off; production defaults sticky on.
   // Pass `JEV_ROUTER_STICKY: undefined` to exercise the real default.
@@ -86,17 +90,25 @@ function load(
           };
         }
         fetches++;
+        asked.push({ url, authorization: init?.headers?.authorization });
         lastState = init?.body ? JSON.parse(init.body).state : undefined;
-        const good = ok;
+        const good = ok && ![...failingHosts].some((h) => url.includes(h));
         ok = true;
+        // Laya's own `confidence` is a different quantity (one minus the
+        // normalised entropy); the Jev-scale number is `x_jev_confidence`.
+        const laya = url.includes("nas.lan");
         return {
           ok: good,
           status: good ? 200 : 500,
           headers: {},
           text: JSON.stringify({
             answers: {
-              tier: { type: "choice", choice: tier, confidence },
-              effort: { type: "score", score, confidence: scoreConfidence },
+              tier: laya
+                ? { type: "choice", choice: tier, confidence: 0.99, x_jev_confidence: confidence }
+                : { type: "choice", choice: tier, confidence },
+              effort: laya
+                ? { type: "score", score, confidence: 0.99, x_jev_confidence: scoreConfidence }
+                : { type: "score", score, confidence: scoreConfidence },
             },
           }),
         };
@@ -175,6 +187,10 @@ function load(
       modelsReply = reply;
     },
     modelsFetches: () => modelsFetches,
+    /** The routing requests so far, in order. */
+    asked: () => asked,
+    /** Makes every routing request to a URL containing `host` fail. */
+    failHost: (host: string) => void failingHosts.add(host),
     modelsKeySent: () => modelsKeySent,
     /** What `$.session.model()` returns. */
     setSessionModel: (model: string) => {
@@ -5672,5 +5688,102 @@ describe("register: what the engine's loader accepts (2026-10-21)", () => {
         });
     }
     assert.deepEqual(bad, []);
+  });
+});
+
+describe("register: Laya and a chain of providers (2026-10-21)", () => {
+  const started = async (over: Record<string, string | undefined> = {}) => {
+    const kit = load({ JEV_ROUTER_STICKY: "1", ...over });
+    await kit.hooks.get("session.start")!(kit.$, {}, async (e: unknown) => e);
+    return kit;
+  };
+  type Kit = Awaited<ReturnType<typeof started>>;
+  const report = async (kit: Kit) =>
+    (await kit.hooks.get('command.run:{"command":"jev"}')!(kit.$, { args: "" })).text as string;
+  async function turn(kit: Kit, id: string) {
+    await kit.hooks.get("turn.start")!(kit.$, { text: "implement it", turnId: id }, async (e: unknown) => e);
+    let sent: { model?: string; effort?: string } = {};
+    const chunks = await collect(
+      kit.hooks.get("turn.step")!(kit.$, { turnId: id, index: 0 }, (e: { model: string; effort: string }) => {
+        sent = e;
+        return answeredBy(e.model ?? "claude-opus-5-5");
+      }),
+    );
+    return { sent, text: chunks.filter((c: { kind: string }) => c.kind === "text").map((c: { text: string }) => c.text).join("") };
+  }
+
+  test("LAYA_BASE_URL alone sets up Laya, and /jev says how its confidence is read", async () => {
+    const kit = await started({ LAYA_BASE_URL: "https://nas.lan:8443" });
+    assert.match(await report(kit), /provider\s+laya · LAYA_BASE_URL is set · laya · confidence read from x_jev_confidence/);
+  });
+
+  test("a Laya server that asks for no key is sent none, and is asked at its own address", async () => {
+    const kit = await started({ LAYA_BASE_URL: "https://nas.lan:8443" });
+    kit.setTier("opus", 0.95, 2);
+    await turn(kit, "l1");
+    assert.deepEqual(kit.asked(), [{ url: "https://nas.lan:8443/v1/systemone", authorization: undefined }]);
+  });
+
+  test("LAYA_API_KEY goes to Laya as a bearer token", async () => {
+    const kit = await started({ LAYA_BASE_URL: "https://nas.lan", LAYA_API_KEY: "laya-secret" });
+    kit.setTier("opus", 0.95, 2);
+    await turn(kit, "l2");
+    assert.equal(kit.asked()[0]?.authorization, "Bearer laya-secret");
+  });
+
+  test("the bar is read against x_jev_confidence, not Laya's own confidence, and the line names Laya", async () => {
+    const kit = await started({ LAYA_BASE_URL: "https://nas.lan" });
+    kit.setTier("sonnet", 0.95, 1, 0.9);
+    await turn(kit, "l3");
+    // Laya's `confidence` says 0.99 on everything; the Jev-scale number is 0.5.
+    kit.setTier("haiku", 0.5, 0, 0.9);
+    const t = await turn(kit, "l4");
+    assert.equal(t.sent.model, "claude-sonnet-5-5", "50% on x_jev_confidence does not clear a 75% bar");
+    assert.match(t.text, /kept sonnet: Laya 50% on haiku, needs 75%/);
+  });
+
+  test("a confident x_jev_confidence moves the model, and the route line says Laya", async () => {
+    const kit = await started({ LAYA_BASE_URL: "https://nas.lan" });
+    kit.setTier("sonnet", 0.95, 1, 0.9);
+    await turn(kit, "l5");
+    kit.setTier("opus", 0.97, 2, 0.9);
+    const t = await turn(kit, "l6");
+    assert.equal(t.sent.model, "claude-opus-5-5");
+    assert.match(t.text, /opus · high · Laya 97%/);
+  });
+
+  test("a Laya failure names Laya in the reason", async () => {
+    const kit = await started({ LAYA_BASE_URL: "https://nas.lan" });
+    kit.fail();
+    const t = await turn(kit, "l7");
+    assert.match(t.text, /not routed: laya said HTTP 500/);
+  });
+
+  test("with a fallback list, a failing first provider hands the turn to the next", async () => {
+    const kit = await started({ LAYA_BASE_URL: "https://nas.lan", OPENROUTER_API_KEY: "or-key", JEV_ROUTER_PROVIDER: "laya,openrouter" });
+    kit.failHost("nas.lan");
+    kit.setTier("opus", 0.97, 2, 0.9);
+    const t = await turn(kit, "l8");
+    assert.deepEqual(kit.asked().map((a) => a.url), ["https://nas.lan/v1/systemone", "https://openrouter.ai/api/v1/systemone"]);
+    assert.equal(kit.asked()[1]?.authorization, "Bearer or-key");
+    assert.equal(kit.asked()[0]?.authorization, undefined, "the OpenRouter key never went to the NAS");
+    assert.match(t.text, /opus · .* · Jev 97%/, "answered by Jev through OpenRouter, so it reads as Jev");
+    assert.match(await report(kit), /fallback\s+laya → openrouter/);
+  });
+
+  test("a named route without its key stops the setup and says which variable", async () => {
+    const kit = await started({ JEV_ROUTER_PROVIDER: "openrouter" });
+    assert.match(await report(kit), /provider\s+NOT SET UP — JEV_ROUTER_PROVIDER=openrouter but OPENROUTER_API_KEY is not set/);
+  });
+
+  test("an OpenRouter key alone routes nothing: it is not chosen by its key", async () => {
+    const kit = await started({ OPENROUTER_API_KEY: "or-key" });
+    assert.match(await report(kit), /provider\s+NOT SET UP/);
+    assert.equal(kit.asked().length, 0);
+  });
+
+  test("compaction by Jev needs TypeSafe direct, and says so for a Laya route", async () => {
+    const kit = await started({ LAYA_BASE_URL: "https://nas.lan" });
+    assert.match(await report(kit), /compact\s+on, but the laya route cannot score tool calls/);
   });
 });

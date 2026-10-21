@@ -21,6 +21,14 @@
   a saved copy and the built-in tables as the fallback. The router reads its
   prices, windows and plans; `JEV_ROUTER_CATALOG=0` turns it off, and
   `/jev` shows where it came from.
+- **More routes to the decision model.** `JEV_ROUTER_PROVIDER` takes `openrouter`,
+  `commandcode`, `opencode` and `laya` besides `typesafe` and `gateway`, or a list
+  tried in order (`laya,openrouter`) that shares one time budget. Each route has its
+  own key and a fixed address; `LAYA_BASE_URL` is your own server (https, any host).
+  OpenRouter, Command Code and OpenCode are chosen only by name.
+- **Laya's confidence is read as Jev's scale.** Laya's own `confidence` means
+  something else, so its `x_jev_confidence` is used, and the probabilities when it is
+  absent. The route line names the answerer (`Laya 85%`).
 - **`JEV_ROUTER_PLAN`** (`pro`, `max`, `api`): tiers the plan does not cover
   are not offered. Pro leaves out Fable, which on Pro runs on pay-as-you-go
   usage credits rather than the plan's limits; `/jev` says so.

@@ -3,6 +3,7 @@ import { describe, test } from "node:test";
 
 import {
   askJev,
+  askJevChain,
   DEFAULT_TIMEOUT_MS,
   MAX_TIMEOUT_MS,
   requestBodyOf,
@@ -12,7 +13,7 @@ import {
 } from "../hooks/jev.ts";
 import { labelOf, withLabel } from "../hooks/label.ts";
 import { TIERS } from "../hooks/policy.ts";
-import type { ProviderResult } from "../hooks/provider.ts";
+import type { ProviderOk, ProviderResult } from "../hooks/provider.ts";
 
 const never = () => new Promise<never>(() => {});
 const immediately = async () => undefined;
@@ -517,5 +518,142 @@ describe("shortError: a NEL between Bearer and a token does not hide it (2026-09
     const { shortError } = await import("../hooks/jev.ts");
     assert.doesNotMatch(shortError("proxy rejected Authorization: Bearer\u0085sk_live_ABC123secret"), /sk_live/);
     assert.doesNotMatch(shortError('proxy rejected Authorization: Bearer\u0085"sk_live_ABC123secret"'), /sk_live/);
+  });
+});
+
+describe("a Laya server and a chain of providers", () => {
+  const laya: ProviderOk = { ok: true, name: "laya", endpoint: "https://nas.lan/v1/systemone", model: "laya", apiKey: "" };
+  const openrouter: ProviderOk = {
+    ok: true,
+    name: "openrouter",
+    endpoint: "https://openrouter.ai/api/v1/systemone",
+    model: "typesafe/jev-1.14",
+    apiKey: "or-key",
+  };
+  const answer = answered({ answers: { tier: { type: "choice", choice: "opus" } } });
+  const down: HttpResponseLike = { ok: false, status: 503, text: "" };
+
+  test("a server that asks for no key gets no authorization header", async () => {
+    let headers: Record<string, string> | undefined;
+    const r = await askJev({
+      ...base,
+      provider: laya,
+      fetch: async (_u: string, init?: HttpInitLike) => {
+        headers = init?.headers;
+        return answer;
+      },
+    });
+    assert.ok(r.ok);
+    assert.deepEqual(Object.keys(headers ?? {}), ["content-type"]);
+    assert.equal(r.via, "laya");
+  });
+
+  test("a key is sent as a bearer token to the route it belongs to", async () => {
+    const seen: [string, string | undefined][] = [];
+    await askJev({
+      ...base,
+      provider: openrouter,
+      fetch: async (url: string, init?: HttpInitLike) => {
+        seen.push([url, init?.headers?.authorization]);
+        return answer;
+      },
+    });
+    assert.deepEqual(seen, [["https://openrouter.ai/api/v1/systemone", "Bearer or-key"]]);
+  });
+
+  test("the chain asks the next provider when one fails at once, and says who answered", async () => {
+    const urls: string[] = [];
+    const r = await askJevChain({
+      ...base,
+      providers: [laya, openrouter],
+      fetch: async (url: string) => {
+        urls.push(url);
+        return url.includes("nas.lan") ? down : answer;
+      },
+    });
+    assert.ok(r.ok);
+    assert.equal(r.via, "openrouter");
+    assert.deepEqual(urls, ["https://nas.lan/v1/systemone", "https://openrouter.ai/api/v1/systemone"]);
+  });
+
+  test("the first to answer ends the chain", async () => {
+    let calls = 0;
+    const r = await askJevChain({
+      ...base,
+      providers: [laya, openrouter],
+      fetch: async () => {
+        calls++;
+        return answer;
+      },
+    });
+    assert.ok(r.ok);
+    assert.equal(r.via, "laya");
+    assert.equal(calls, 1);
+  });
+
+  test("they share one budget: the next gets what is left", async () => {
+    let t = 1000;
+    const budgets: number[] = [];
+    const r = await askJevChain({
+      ...base,
+      timeoutMs: 1500,
+      now: () => t,
+      providers: [laya, openrouter],
+      sleep: async (ms: number) => {
+        budgets.push(ms);
+        return never();
+      },
+      fetch: async (url: string) => {
+        t += 400;
+        return url.includes("nas.lan") ? down : answer;
+      },
+    });
+    assert.ok(r.ok);
+    assert.deepEqual(budgets, [1500, 1100]);
+    assert.equal(r.ms, 800);
+  });
+
+  test("a provider that times out has spent the budget, and the turn goes unrouted", async () => {
+    let calls = 0;
+    const r = await askJevChain({
+      ...base,
+      timeoutMs: 200,
+      providers: [laya, openrouter],
+      sleep: immediately,
+      fetch: async () => {
+        calls++;
+        return never();
+      },
+    });
+    assert.ok(!r.ok);
+    assert.equal(calls, 1);
+    assert.match(r.reason, /^laya: timed out after 200ms$/);
+  });
+
+  test("one provider's failure reads as it always did; several say who said what", async () => {
+    const one = await askJevChain({ ...base, providers: [laya], fetch: async () => down });
+    assert.ok(!one.ok);
+    assert.equal(one.reason, "laya said HTTP 503");
+    const two = await askJevChain({ ...base, providers: [laya, openrouter], fetch: async () => down });
+    assert.ok(!two.ok);
+    assert.equal(two.reason, "laya said HTTP 503; then openrouter said HTTP 503");
+  });
+
+  test("a turn ceded to a newer copy stops the chain", async () => {
+    const abort = new AbortController();
+    let calls = 0;
+    const r = await askJevChain({
+      ...base,
+      signal: abort.signal,
+      providers: [laya, openrouter],
+      fetch: async () => {
+        calls++;
+        abort.abort();
+        return never();
+      },
+    });
+    assert.ok(!r.ok);
+    assert.equal(r.reason, "ceded");
+    assert.equal(calls, 1);
   });
 });

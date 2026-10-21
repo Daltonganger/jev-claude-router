@@ -437,11 +437,30 @@ All settings go in the `env` block of `~/.claude/settings.json`.
 | --- | --- | --- |
 | `TYPESAFE_API_KEY` | | TypeSafe direct key. |
 | `AI_GATEWAY_API_KEY` | | Vercel AI Gateway key. |
-| `JEV_ROUTER_PROVIDER` | TypeSafe if its key is set | `typesafe` (or `direct`) or `gateway` (or `vercel`); anything else chooses by the keys set. |
+| `OPENROUTER_API_KEY` | | OpenRouter key, for `JEV_ROUTER_PROVIDER=openrouter` (Jev 1.14, `https://openrouter.ai/api/v1/systemone`). |
+| `COMMANDCODE_API_KEY` | | Command Code key, for `JEV_ROUTER_PROVIDER=commandcode` (the Provider API; GOAT plan and above). |
+| `OPENCODE_API_KEY` | | OpenCode Console key, for `JEV_ROUTER_PROVIDER=opencode`. Also set `JEV_ROUTER_JEV_MODEL`: the router does not know OpenCode's id for Jev. |
+| `LAYA_BASE_URL` | | Your own Laya server, e.g. `https://nas.lan:8443`. https only, any host, no login in the URL; a trailing `/v1/systemone` is dropped. Setting it alone makes Laya the provider. |
+| `LAYA_API_KEY` | | Sent to the Laya server and nowhere else; leave unset for a server that asks for none. |
+| `JEV_ROUTER_PROVIDER` | TypeSafe if its key is set, else Laya if `LAYA_BASE_URL` is set, else the gateway | One of `typesafe` (or `direct`), `gateway` (or `vercel`), `openrouter`, `commandcode`, `opencode`, `laya`, or a list tried in order, e.g. `laya,openrouter`. A named route without its key or URL is an error. OpenRouter, Command Code and OpenCode are never chosen by their key alone, since those keys are used for other things; anything unrecognised chooses by the keys set. |
 | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | Must be https. Only `*.typesafe.ai` is accepted unless `JEV_ROUTER_ALLOW_CUSTOM_BASE=1`. A trailing `/v1/systemone` is dropped, since the router adds it. |
 | `JEV_ROUTER_ALLOW_CUSTOM_BASE` | off | `1` lets `TYPESAFE_BASE_URL` name any https host. That host receives your key and prompts, so set both only in your own `~/.claude/settings.json`, and check that a project's settings do not set them. |
-| `JEV_ROUTER_JEV_MODEL` | `jev-latest` | Pin a Jev version (e.g. `jev-1.13.0`) so confidences stay stable across releases. TypeSafe direct only; the gateway serves its own. |
+| `JEV_ROUTER_JEV_MODEL` | per route | Pin the model id (e.g. `jev-1.13.0` on TypeSafe direct) so confidences stay stable across releases. Defaults: `jev-latest` on TypeSafe, `typesafe/jev-1.14` on OpenRouter, `typesafe/jev-1.14.0` on Command Code, `laya` for Laya. The gateway serves its own. |
 | `JEV_ROUTER_TIMEOUT_MS` | `1500` | How long a turn waits for Jev, in milliseconds. At least 100 (anything less is taken for a mistake and the default used), at most 8000. |
+
+**Laya, and a fallback.** Laya is a Jev-compatible model you run yourself. Its own
+`confidence` is a different quantity from Jev's (one minus the normalised entropy), so
+the router reads the `x_jev_confidence` it also sends, which is on Jev's scale, and
+never `confidence`; with neither it derives the number from the probabilities. The
+route line names it (`Laya 85%`), so that a number from one model is not read as the
+other's. A server with a self-signed certificate needs `NODE_EXTRA_CA_CERTS` pointing
+at its certificate, and a model on a NAS may need a longer `JEV_ROUTER_TIMEOUT_MS`
+(at most 8000). With a list in `JEV_ROUTER_PROVIDER` the providers share the one
+budget: when the first fails at once (a refused connection, an HTTP error) the next is
+asked with the time left; when it times out the budget is spent and the turn goes
+unrouted. The thresholds below were tuned on Jev; they are used unchanged for Laya
+until they are measured on it. Compaction by Jev stays on TypeSafe direct, whatever
+else is listed.
 
 **Routing**
 

@@ -6,7 +6,15 @@
 import assert from "assert";
 import { describe, it } from "node:test";
 
-import { providerOf, typesafeBaseOf } from "../hooks/provider.ts";
+import {
+  confidenceSourceOf,
+  labelOf,
+  layaBaseOf,
+  providerOf,
+  providersOf,
+  typesafeBaseOf,
+  type ProviderEnv,
+} from "../hooks/provider.ts";
 
 describe("providerOf", () => {
   it("prefers TypeSafe direct when TYPESAFE_API_KEY is set", () => {
@@ -277,5 +285,167 @@ describe("only what the chosen provider uses is checked (2026-09-29)", () => {
     assert.ok(gm.ok);
     const tm = providerOf({ TYPESAFE_API_KEY: "ts_live_abc", JEV_ROUTER_JEV_MODEL: "jev-1.13.0+build.5" } as never);
     assert.ok(tm.ok && tm.model === "jev-1.13.0+build.5");
+  });
+});
+
+const env = (over: Partial<ProviderEnv> = {}): ProviderEnv => ({
+  TYPESAFE_API_KEY: undefined,
+  AI_GATEWAY_API_KEY: undefined,
+  JEV_ROUTER_PROVIDER: undefined,
+  TYPESAFE_BASE_URL: undefined,
+  ...over,
+});
+
+describe("Laya on your own server", () => {
+  it("is the route when only LAYA_BASE_URL is set, and needs no key", () => {
+    assert.deepStrictEqual(providerOf(env({ LAYA_BASE_URL: "https://nas.lan:8443" })), {
+      ok: true,
+      name: "laya",
+      endpoint: "https://nas.lan:8443/v1/systemone",
+      model: "laya",
+      apiKey: "",
+    });
+  });
+
+  it("sends LAYA_API_KEY to that server and to nowhere else", () => {
+    const p = providerOf(env({ LAYA_BASE_URL: "https://nas.lan", LAYA_API_KEY: " laya-key \n" }));
+    assert.ok(p.ok);
+    assert.strictEqual(p.apiKey, "laya-key");
+    assert.strictEqual(p.endpoint, "https://nas.lan/v1/systemone");
+  });
+
+  it("keeps a path in front of it, and does not double the endpoint's own", () => {
+    for (const base of ["https://nas.lan/laya", "https://nas.lan/laya/", "https://nas.lan/laya/v1", "https://nas.lan/laya/v1/systemone"])
+      assert.deepStrictEqual(layaBaseOf(base), { ok: true, base: "https://nas.lan/laya" }, base);
+  });
+
+  it("must be https and must not carry a login", () => {
+    for (const [bad, reason] of [
+      ["http://nas.lan", /must use https/],
+      ["https://user:pw@nas.lan", /must not carry a login/],
+      ["nas.lan", /not a valid URL/],
+    ] as const) {
+      const r = layaBaseOf(bad);
+      assert.ok(!r.ok);
+      assert.match(r.reason, reason);
+    }
+  });
+
+  it("named without a URL is an error that names the variable", () => {
+    const p = providerOf(env({ JEV_ROUTER_PROVIDER: "laya" }));
+    assert.deepStrictEqual(p, { ok: false, reason: "JEV_ROUTER_PROVIDER=laya but LAYA_BASE_URL is not set" });
+  });
+
+  it("refuses a key a header cannot carry, without echoing it", () => {
+    const p = providerOf(env({ LAYA_BASE_URL: "https://nas.lan", LAYA_API_KEY: "has space" }));
+    assert.ok(!p.ok);
+    assert.match(p.reason, /LAYA_API_KEY/);
+    assert.ok(!p.reason.includes("has space"));
+  });
+
+  it("takes its model from JEV_ROUTER_JEV_MODEL when pinned", () => {
+    const p = providerOf(env({ LAYA_BASE_URL: "https://nas.lan", JEV_ROUTER_JEV_MODEL: "laya-0.4" }));
+    assert.ok(p.ok);
+    assert.strictEqual(p.model, "laya-0.4");
+  });
+
+  it("comes after a TypeSafe key and before the gateway's when nothing is named", () => {
+    const laya = { LAYA_BASE_URL: "https://nas.lan" };
+    assert.strictEqual(providerOf(env({ ...laya, TYPESAFE_API_KEY: "ts" })).ok && (providerOf(env({ ...laya, TYPESAFE_API_KEY: "ts" })) as { name: string }).name, "typesafe");
+    assert.strictEqual((providerOf(env({ ...laya, AI_GATEWAY_API_KEY: "gw" })) as { name: string }).name, "laya");
+  });
+});
+
+describe("OpenRouter, Command Code and OpenCode", () => {
+  it("OpenRouter: a fixed address, Jev 1.14, its own key", () => {
+    assert.deepStrictEqual(providerOf(env({ JEV_ROUTER_PROVIDER: "openrouter", OPENROUTER_API_KEY: "or-key" })), {
+      ok: true,
+      name: "openrouter",
+      endpoint: "https://openrouter.ai/api/v1/systemone",
+      model: "typesafe/jev-1.14",
+      apiKey: "or-key",
+    });
+  });
+
+  it("Command Code: the provider API, Jev 1.14.0 pinned", () => {
+    assert.deepStrictEqual(providerOf(env({ JEV_ROUTER_PROVIDER: "command-code", COMMANDCODE_API_KEY: "cc" })), {
+      ok: true,
+      name: "commandcode",
+      endpoint: "https://api.commandcode.ai/provider/v1/systemone",
+      model: "typesafe/jev-1.14.0",
+      apiKey: "cc",
+    });
+  });
+
+  it("OpenCode needs its model id given: the router does not know it", () => {
+    const missing = providerOf(env({ JEV_ROUTER_PROVIDER: "opencode", OPENCODE_API_KEY: "oc" }));
+    assert.ok(!missing.ok);
+    assert.match(missing.reason, /needs JEV_ROUTER_JEV_MODEL/);
+    const given = providerOf(env({ JEV_ROUTER_PROVIDER: "opencode", OPENCODE_API_KEY: "oc", JEV_ROUTER_JEV_MODEL: "jev-1.13" }));
+    assert.ok(given.ok);
+    assert.strictEqual(given.endpoint, "https://opencode.ai/inference/systemone/v1/systemone");
+  });
+
+  it("a named route without its key is an error naming the variable", () => {
+    for (const [name, key] of [["openrouter", "OPENROUTER_API_KEY"], ["commandcode", "COMMANDCODE_API_KEY"], ["opencode", "OPENCODE_API_KEY"]] as const) {
+      const p = providerOf(env({ JEV_ROUTER_PROVIDER: name }));
+      assert.ok(!p.ok);
+      assert.match(p.reason, new RegExp(key));
+    }
+  });
+
+  it("is never chosen by its key alone: that key is used for other things", () => {
+    for (const key of ["OPENROUTER_API_KEY", "COMMANDCODE_API_KEY", "OPENCODE_API_KEY"] as const) {
+      const p = providerOf(env({ [key]: "some-key" }));
+      assert.deepStrictEqual(p, { ok: false, reason: "no TYPESAFE_API_KEY or AI_GATEWAY_API_KEY" });
+    }
+  });
+
+  it("TYPESAFE_BASE_URL does not move any other route", () => {
+    const p = providerOf(env({ JEV_ROUTER_PROVIDER: "openrouter", OPENROUTER_API_KEY: "k", TYPESAFE_BASE_URL: "https://evil.example", JEV_ROUTER_ALLOW_CUSTOM_BASE: "1" }));
+    assert.ok(p.ok);
+    assert.strictEqual(p.endpoint, "https://openrouter.ai/api/v1/systemone");
+  });
+});
+
+describe("a list of providers", () => {
+  const all = { LAYA_BASE_URL: "https://nas.lan", OPENROUTER_API_KEY: "or", TYPESAFE_API_KEY: "ts" };
+
+  it("is tried in the order it is named", () => {
+    const r = providersOf(env({ ...all, JEV_ROUTER_PROVIDER: "laya, openrouter;typesafe" }));
+    assert.ok(r.ok);
+    assert.deepStrictEqual(r.providers.map((p) => p.name), ["laya", "openrouter", "typesafe"]);
+  });
+
+  it("names each once, ignores a name it does not know, and one that is none falls back to the keys", () => {
+    const r = providersOf(env({ ...all, JEV_ROUTER_PROVIDER: "laya,laya,bogus" }));
+    assert.ok(r.ok);
+    assert.deepStrictEqual(r.providers.map((p) => p.name), ["laya"]);
+    const auto = providersOf(env({ ...all, JEV_ROUTER_PROVIDER: "bogus" }));
+    assert.ok(auto.ok);
+    assert.deepStrictEqual(auto.providers.map((p) => p.name), ["typesafe"]);
+  });
+
+  it("fails loudly when one of them cannot be built", () => {
+    const r = providersOf(env({ LAYA_BASE_URL: "https://nas.lan", JEV_ROUTER_PROVIDER: "laya,openrouter" }));
+    assert.ok(!r.ok);
+    assert.match(r.reason, /OPENROUTER_API_KEY/);
+  });
+
+  it("is a single provider when one is named, as before", () => {
+    const r = providersOf(env({ TYPESAFE_API_KEY: "ts", JEV_ROUTER_PROVIDER: "direct" }));
+    assert.ok(r.ok);
+    assert.strictEqual(r.providers.length, 1);
+  });
+});
+
+describe("what a route says about its confidence", () => {
+  it("Laya is named on the route line and read for x_jev_confidence; the rest are Jev", () => {
+    assert.strictEqual(labelOf("laya"), "Laya");
+    assert.strictEqual(confidenceSourceOf("laya"), "x_jev");
+    for (const name of ["typesafe", "gateway", "openrouter", "commandcode", "opencode"] as const) {
+      assert.strictEqual(labelOf(name), "Jev");
+      assert.strictEqual(confidenceSourceOf(name), "jev");
+    }
   });
 });

@@ -2,6 +2,7 @@ import type { On } from "claude-code";
 
 import {
   askJev,
+  askJevChain,
   timeoutOf,
   type HttpInitLike,
   type HttpResponseLike,
@@ -79,7 +80,7 @@ import {
   type Overridable,
   type State,
 } from "./persist.ts";
-import { providerOf, type ProviderResult } from "./provider.ts";
+import { providersOf, type ProviderOk, type ProviderResult } from "./provider.ts";
 import {
   compactOnOf,
   compactTimeoutOf,
@@ -335,6 +336,8 @@ const MID_TURN: ReadonlySet<string> = new Set([
  */
 type Settings = {
   provider: ProviderResult;
+  /** Every provider to try, in order; empty when none could be set up (`provider` then says why). */
+  providers: readonly ProviderOk[];
   timeoutMs: number;
   offered: readonly Tier[];
   excluded: readonly Tier[];
@@ -513,17 +516,22 @@ async function seedSettings(
   const tiers = tierFilter(
     new Set([...excludedTiers(await $.env.get("JEV_ROUTER_EXCLUDE")), ...planExcluded]),
   );
+  const routes = providersOf({
+    TYPESAFE_API_KEY: await $.env.get("TYPESAFE_API_KEY"),
+    AI_GATEWAY_API_KEY: await $.env.get("AI_GATEWAY_API_KEY"),
+    JEV_ROUTER_PROVIDER: await $.env.get("JEV_ROUTER_PROVIDER"),
+    TYPESAFE_BASE_URL: await $.env.get("TYPESAFE_BASE_URL"),
+    JEV_ROUTER_ALLOW_CUSTOM_BASE: await $.env.get("JEV_ROUTER_ALLOW_CUSTOM_BASE"),
+    JEV_ROUTER_JEV_MODEL: await $.env.get("JEV_ROUTER_JEV_MODEL"),
+    OPENROUTER_API_KEY: await $.env.get("OPENROUTER_API_KEY"),
+    COMMANDCODE_API_KEY: await $.env.get("COMMANDCODE_API_KEY"),
+    OPENCODE_API_KEY: await $.env.get("OPENCODE_API_KEY"),
+    LAYA_BASE_URL: await $.env.get("LAYA_BASE_URL"),
+    LAYA_API_KEY: await $.env.get("LAYA_API_KEY"),
+  });
   return {
-    provider: providerOf({
-      TYPESAFE_API_KEY: await $.env.get("TYPESAFE_API_KEY"),
-      AI_GATEWAY_API_KEY: await $.env.get("AI_GATEWAY_API_KEY"),
-      JEV_ROUTER_PROVIDER: await $.env.get("JEV_ROUTER_PROVIDER"),
-      TYPESAFE_BASE_URL: await $.env.get("TYPESAFE_BASE_URL"),
-      JEV_ROUTER_ALLOW_CUSTOM_BASE: await $.env.get(
-        "JEV_ROUTER_ALLOW_CUSTOM_BASE",
-      ),
-      JEV_ROUTER_JEV_MODEL: await $.env.get("JEV_ROUTER_JEV_MODEL"),
-    }),
+    provider: routes.ok ? routes.providers[0]! : routes,
+    providers: routes.ok ? routes.providers : [],
     timeoutMs: timeoutOf(await $.env.get("JEV_ROUTER_TIMEOUT_MS")),
     offered: tiers.offered,
     excluded: tiers.excluded,
@@ -569,16 +577,19 @@ async function classify(
   signal?: AbortSignal,
   source: StateSource = "prompt",
 ) {
-  return askJev({
-    fetch: (url, init) => $.http.fetch(url, init),
-    sleep: (ms, options) => $.clock.sleep(ms, options),
-    provider: settings.provider,
+  const common = {
+    fetch: (url: string, init?: HttpInitLike) => $.http.fetch(url, init),
+    sleep: (ms: number, options?: { signal?: AbortSignal }) => $.clock.sleep(ms, options),
     state: text,
     offered,
     source,
     timeoutMs: settings.timeoutMs,
     signal,
-  });
+  };
+  // One provider asks as before; several share the budget, one after another.
+  return settings.providers.length > 1
+    ? askJevChain({ ...common, providers: settings.providers })
+    : askJev({ ...common, provider: settings.provider });
 }
 
 /**
@@ -1560,7 +1571,7 @@ export function register(on: On) {
     ) {
       const result = await pruneTranscript({
         messages: transcript,
-        provider: settings.provider,
+        provider: settings.providers.find((p) => p.name === "typesafe") ?? settings.provider,
         fetch: (url, init) => $.http.fetch(url, init),
         sleep: (ms, options) => $.clock.sleep(ms, options),
         timeoutMs: settings.compactTimeoutMs,
@@ -1698,13 +1709,14 @@ export function register(on: On) {
         return { text: unknownCommandReply(sub, false) };
       }
       // Only TypeSafe direct answers the yes/no questions scoring asks.
-      const gatewayOnly = settings.provider.ok && settings.provider.name !== "typesafe";
+      const gatewayOnly = settings.provider.ok && !settings.providers.some((p) => p.name === "typesafe");
+      const routeName = settings.provider.ok && settings.provider.name !== "gateway" ? `the ${settings.provider.name} route` : "the gateway";
       return {
         text:
           `compaction by Jev ${settings.compactOn ? "on" : "off"}` +
           (settings.compactOn
             ? gatewayOnly
-              ? ", but the gateway cannot score tool calls, so the engine's own summary runs. Routing through TypeSafe direct (TYPESAFE_API_KEY, with JEV_ROUTER_PROVIDER unset or typesafe) enables it."
+              ? `, but ${routeName} cannot score tool calls, so the engine's own summary runs. Routing through TypeSafe direct (TYPESAFE_API_KEY, with JEV_ROUTER_PROVIDER unset or naming typesafe) enables it.`
               : ": at each compaction, Jev scores every tool call and the stale ones are dropped or cut; the conversation stays verbatim. /jev compact off restores the engine's summary."
             : ": the engine's own summary runs. /jev compact on to prune with Jev instead."),
       };
@@ -1775,6 +1787,7 @@ export function register(on: On) {
         enabled,
         surface,
         provider: settings.provider,
+        providers: settings.providers.map((p) => p.name),
         timeoutMs: settings.timeoutMs,
         sticky: settings.sticky,
         upgradeMax: settings.upgradeMax,

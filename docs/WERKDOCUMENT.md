@@ -1,6 +1,6 @@
 # Werkdocument: JEV-router voor Claude Code
 
-Status: stap 1 en 2 gebouwd (zie Volgorde), de rest is plan. Laatst bijgewerkt: 2026-10-20.
+Status: stap 1 tot en met 3 gebouwd (zie Volgorde), de rest is plan. Laatst bijgewerkt: 2026-10-20.
 
 Dit document is de lijst van wat we gaan doen, in welke volgorde, en wat we nog
 moeten uitzoeken. Wat hier "gemeten" of "bevestigd" heet, is dat ook; de rest staat
@@ -110,8 +110,15 @@ wordt of eerst in `catalog.json` wordt vrijgegeven.
   client testen of de pluginhooks het plan of de gebruikte inlog doorgeven
   (`.claude/types/claude-code.d.ts` bekijken). Lukt dat niet, dan blijft de variabele de
   bron en meldt de plugin bij sessiestart welk plan hij aanneemt.
-- Dat Fable op Pro niet is inbegrepen is een aanname van de gebruiker; die staat in
-  `catalog.json` zodat hij te corrigeren is zonder release.
+- **Fable op Pro, volgens Anthropic** (support.claude.com, artikel 15424964, gelezen
+  2026-10-21): Fable zit niet in Pro's gebruikslimieten en draait vanaf het eerste token op
+  pay-as-you-go-tegoed ("usage credits"). Bij Max is Fable onderdeel van het plan, binnen
+  een aandeel van de wekelijkse limiet; daarboven tegoed. Voor Claude Code geldt hetzelfde
+  als voor claude.ai; Fable 5.1 vraagt Claude Code 2.1.255 of nieuwer. Dat verandert de
+  betekenis van "Fable uit op Pro": Fable is er wel, maar kost echt geld. De standaard blijft
+  hem uit te zetten (kostenbescherming), `/jev tiers on fable` zet hem terug, en de
+  dollarbedragen in de routeregel zijn voor Fable op Pro dus echte kosten. `catalog.json` kan
+  de regel en de toelichting (`note`) per plan corrigeren.
 - Op Pro en Max betaal je niet per token maar tegen een gebruikslimiet. De dollarbedragen
   in de routeregel en `JEV_ROUTER_UPGRADE_MAX` zijn dan een maat voor verbruik, niet voor
   kosten. De weergave krijgt een modus die dat niet als geld toont.
@@ -127,6 +134,33 @@ aanpassing nodig:
 - Windows en tests aanpassen die van 200K uitgaan (`pricing.test.ts`, `policy.test.ts`,
   `register.test.ts`) en de README-tekst over "too long for haiku".
 - Controleren: cache-leesverhouding, minimale cacheprefix en effort-niveaus van Haiku 5.5.
+  Uit de documentatie (2026-10-21): Haiku 5.5 kent alle vijf de niveaus (standaard `medium`),
+  de minimale cacheprefix is 512 tokens, en cache-lezen kost 10% van invoer (afwijkend:
+  Opus 5.5 en Sonnet 5.5 5%, Fable 5.1 2,5%).
+
+### Kost een effort-wijziging op Haiku 5.5 de cache?
+
+Wat de documentatie zegt (platform.claude.com, "Prompt caching" en "Effort"): een wijziging van
+de **top-level** `output_config.effort` tussen requests maakt de berichtenblokken van de cache
+altijd ongeldig, op elk model. Een wijziging via een **per-bericht**-effort (een
+`role: "system"`-bericht met `output_config`, beta-header
+`mid-conversation-output-config-2026-07-01`) laat de cache intact; dat bestaat voor Fable 5.1,
+Opus 5.5, Opus 5, Sonnet 5.5 en Haiku 5.5, niet voor Sonnet 5 en ouder, en niet op Bedrock
+voor Haiku 5.5 of Sonnet 5.5. Dat verklaart de eerdere meting: Sonnet 5 had geen per-bericht-
+effort (elke wijziging herschreef de cache), en Haiku 4.5 kent effort niet (de wijziging doet
+niets). De vraag voor Haiku 5.5 is dus **welke van de twee Claude Code stuurt**.
+
+Meten, in twee stappen:
+1. `ANTHROPIC_API_KEY=… npm run measure-effort-cache` (script `scripts/measure-effort-cache.mjs`,
+   een paar cent). Vier requests met dezelfde lange eerste boodschap: effort laag (schrijft),
+   nog eens laag (controle), top-level hoog, per-bericht hoog. Het zegt per variant of de cache
+   blijft, of de hele prefix opnieuw geschreven wordt. Ook te draaien voor Sonnet 5.5 en Opus 5.5.
+2. Wat Claude Code zelf doet: in een echte sessie op Haiku 5.5, een beurt, dan een beurt waarbij
+   Jev een andere effort kiest, en in `/jev` kijken naar `(NN% cached)` van de tweede. Blijft dat
+   rond het niveau van de eerste, dan kost de wijziging niets; zakt het naar bijna 0, dan stuurt
+   Claude Code de top-level waarde en geldt voor Haiku 5.5 hetzelfde als voor Sonnet 5 (en moet
+   `holdsSonnetEffort` ook voor Haiku gelden). Stap 1 zegt wat de API kan; stap 2 wat Claude
+   Code gebruikt.
 
 ## 5. Beslismodellen (de "decider")
 
@@ -283,7 +317,14 @@ typedefinities komen van een vaste commit (`npm run types`); controleren of die 
    platform.claude.com/docs/en/about-claude/pricing (2026-10-21). Daarbij bleek Sonnet 5.5
    zijn cache te lezen voor $0,10, niet $0,20 (voetnoot 2 op die pagina); dat is gecorrigeerd.
    Nog open: of een effort-wijziging op Haiku 5.5 de cache kost (op 4.5 niet; niet gemeten).
-3. Sync uit `/v1/models` (modellen, windows, effort).
+3. Sync uit `/v1/models` (modellen, windows, effort). **Gedaan:** `hooks/models.ts`,
+   `JEV_ROUTER_MODEL_SYNC`, `/jev`-regel `models`. Eisen en keuzes: het verzoek gaat
+   alleen naar `api.anthropic.com` en heeft een API-key nodig (`ANTHROPIC_API_KEY`); een
+   Pro- of Max-login heeft die niet, dan dekt `catalog.json` de modellen. Een nieuwer model
+   van de line wordt pas de tier-model als het een prijs heeft (catalogus of ingebouwde
+   tabel), anders blijft de router staan en meldt `/jev` dat het uit is. Een late lijst
+   verandert niets in de lopende sessie. Een effort die het model niet kent wordt de
+   dichtstbijzijnde die het wel kent.
 4. Provider-laag: eigen host-allowlist, Laya, OpenRouter (5.4), `x_jev_confidence`.
 5. Meetset en benchmark; pas daarna Perplexity en drempels per beslismodel.
 6. Auto-detectie van het plan, na test op de echte client.

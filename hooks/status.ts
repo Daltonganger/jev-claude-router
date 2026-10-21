@@ -509,8 +509,11 @@ export type Status = {
   /** `JEV_ROUTER_PLAN` and the tiers it leaves out; absent on older callers. */
   plan?: string | null;
   planExcluded?: readonly Tier[];
+  planNote?: string | null;
   /** Where the catalog came from; absent on older callers. */
   catalog?: string;
+  /** What the model list found and the ladder took from it; absent on older callers. */
+  models?: string;
 };
 
 /**
@@ -1228,10 +1231,11 @@ export function statusReport(status: Status): string {
               (status.planExcluded ?? []).length > 0
                 ? `, does not cover ${(status.planExcluded ?? []).join(", ")}`
                 : ", every tier covered"
-            }`
+            }${status.planNote ? ` — ${words(status.planNote)}` : ""}`
       }`,
     );
   if (status.catalog !== undefined) lines.push(`  catalog   ${status.catalog}`);
+  if (status.models !== undefined) lines.push(`  models    ${status.models}`);
   if (status.spent > 0) lines.push(`  spent     ${usd(status.spent)} this session`);
 
   lines.push("");

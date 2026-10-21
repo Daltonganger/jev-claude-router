@@ -106,6 +106,17 @@ describe("parseCatalog", () => {
     assert.ok(r.dropped.includes("decider evil") && r.dropped.includes("decider slashy"), "a URL is not a model id");
   });
 
+  it("keeps a plan's note, single-spaced and cut to length, and none when it is not text", () => {
+    const f = file() as any;
+    f.plans.pro.note = "  Fable runs\n on   credits ";
+    f.plans.max.note = 5;
+    const c = parsed(f);
+    assert.strictEqual(c.plans.pro?.note, "Fable runs on credits");
+    assert.strictEqual(c.plans.max?.note, undefined);
+    f.plans.pro.note = "x".repeat(500);
+    assert.strictEqual(parsed(f).plans.pro?.note?.length, 200);
+  });
+
   it("ignores keys it does not know", () => {
     const r = parseCatalog({ ...file(), note: "hi", future: { a: 1 } });
     assert.ok(r.ok);

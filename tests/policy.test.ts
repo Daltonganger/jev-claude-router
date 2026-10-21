@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, test } from "node:test";
+import { afterEach, describe, test } from "node:test";
 
 import {
   asAsked,
@@ -26,6 +26,9 @@ import {
   PLAN_EXCLUDES,
   planExclusions,
   planOf,
+  setEffortSupport,
+  setLadderModels,
+  supportedEffort,
   stickyDecision,
   stickyOf,
   SUBAGENT_CONFIDENCE,
@@ -1009,5 +1012,43 @@ describe("plans", () => {
     assert.deepEqual(planExclusions("pro", ["fable", "opus"]), ["opus", "fable"]);
     assert.deepEqual(planExclusions("pro", ["mythos", "Fable"]), []);
     assert.deepEqual(planExclusions("team", ["fable"]), ["fable"]);
+  });
+});
+
+describe("models taken from the model list", () => {
+  afterEach(() => {
+    setLadderModels(null);
+    setEffortSupport(null);
+  });
+
+  test("a tier can be pointed at another model, and back", () => {
+    const was = MODEL_OF.opus;
+    setLadderModels({ opus: "claude-opus-6" });
+    assert.equal(MODEL_OF.opus, "claude-opus-6");
+    assert.equal(MODEL_OF.fable, "claude-fable-5-1", "the others stay");
+    setLadderModels(null);
+    assert.equal(MODEL_OF.opus, was);
+  });
+
+  test("an effort the model does not accept moves to the nearest it does", () => {
+    setEffortSupport({ sonnet: ["low", "medium", "high", "max"] });
+    assert.equal(supportedEffort("sonnet", "xhigh"), "high", "the highest below");
+    assert.equal(supportedEffort("sonnet", "max"), "max");
+    assert.equal(supportedEffort("opus", "xhigh"), "xhigh", "a tier the list did not describe takes any");
+    setEffortSupport({ haiku: ["high", "max"] });
+    assert.equal(supportedEffort("haiku", "low"), "high", "nothing below: the lowest above");
+    setEffortSupport({ haiku: [] });
+    assert.equal(supportedEffort("haiku", "low"), "low", "an empty list says nothing");
+  });
+
+  test("capTo applies the ceiling first, then the model's levels, and keeps what Jev asked", () => {
+    setEffortSupport({ sonnet: ["low", "medium", "high"] });
+    const d = { tier: "sonnet", model: MODEL_OF.sonnet, effort: "max", confidence: 1, effortConfidence: 1 } as const;
+    const capped = capTo(d, ceilingAt("xhigh"));
+    assert.equal(capped.effort, "high");
+    assert.equal(capped.cappedEffort, "max");
+    const fine = capTo({ ...d, effort: "medium" }, ceilingAt("xhigh"));
+    assert.equal(fine.effort, "medium");
+    assert.equal(fine.cappedEffort, undefined);
   });
 });

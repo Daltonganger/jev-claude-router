@@ -11,6 +11,7 @@ import {
   priceAt,
   priceOfModel,
   setOverlay,
+  setSyncedWindows,
   switchVerdict,
   ttlOf,
   usageCost,
@@ -258,7 +259,10 @@ describe("baseModel: linear, same answers (2026-09-29)", () => {
 });
 
 describe("the catalog overlay", () => {
-  afterEach(() => setOverlay(null));
+  afterEach(() => {
+    setOverlay(null);
+    setSyncedWindows(null);
+  });
   const cheap = { input: 1, write5m: 1, write1h: 1, read: 0.1, output: 1 };
 
   test("a listed id prices from the catalog, dated or not, and the rest from the tables", () => {
@@ -280,6 +284,17 @@ describe("the catalog overlay", () => {
     assert.equal(windowOf("haiku"), 200_000);
     assert.equal(fitsWindow("haiku", 300_000), false);
     assert.equal(fitsWindow("sonnet", 300_000), true);
+  });
+
+  test("a window from the model list sits between the catalog's and the built-in", () => {
+    setSyncedWindows({ haiku: 500_000, sonnet: 600_000 });
+    assert.equal(windowOf("haiku"), 500_000);
+    assert.equal(windowOf("opus"), 1_000_000);
+    setOverlay({ models: new Map(), ladder: {}, windows: { haiku: 200_000 } });
+    assert.equal(windowOf("haiku"), 200_000, "the catalog wins");
+    assert.equal(windowOf("sonnet"), 600_000);
+    setSyncedWindows(null);
+    assert.equal(windowOf("sonnet"), 1_000_000);
   });
 
   test("the verdicts price the tier the catalog names", () => {

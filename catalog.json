@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "updated": "2026-10-21",
-  "note": "Mirrors the plugin's built-in tables (pricing.ts, policy.ts) as of 'updated'. Edit here to change prices, windows or plans for every install without a new release. Pro excluding fable is an assumption, not confirmed.",
+  "note": "Mirrors the plugin's built-in tables (pricing.ts, policy.ts) as of 'updated'. Edit here to change prices, windows or plans for every install without a new release. Pro excluding fable is the router's default, not something Anthropic requires: on Pro, Fable runs on usage credits.",
   "models": {
     "claude-haiku-5-5": {
       "line": "haiku",
@@ -62,13 +62,16 @@
     "pro": {
       "excludeLines": [
         "fable"
-      ]
+      ],
+      "note": "Fable is not in Pro's usage limits: it runs on pay-as-you-go usage credits from the first token (support.claude.com/en/articles/15424964)"
     },
     "max": {
-      "excludeLines": []
+      "excludeLines": [],
+      "note": "Fable is part of Max, within a share of the weekly limit; past it, usage credits (support.claude.com/en/articles/15424964)"
     },
     "api": {
-      "excludeLines": []
+      "excludeLines": [],
+      "note": "billed at API rates"
     }
   },
   "deciders": {}

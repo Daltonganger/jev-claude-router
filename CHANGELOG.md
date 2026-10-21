@@ -22,7 +22,14 @@
   prices, windows and plans; `JEV_ROUTER_CATALOG=0` turns it off, and
   `/jev` shows where it came from.
 - **`JEV_ROUTER_PLAN`** (`pro`, `max`, `api`): tiers the plan does not cover
-  are not offered. Pro leaves out Fable.
+  are not offered. Pro leaves out Fable, which on Pro runs on pay-as-you-go
+  usage credits rather than the plan's limits; `/jev` says so.
+- **The model list** (`hooks/models.ts`): with `ANTHROPIC_API_KEY`, the router
+  reads `GET /v1/models` daily. A tier's window and the efforts its model accepts
+  come from it, and a newer model of the line replaces the tier's model once it
+  has a price. `JEV_ROUTER_MODEL_SYNC=0` turns it off.
+- **`npm run measure-effort-cache`** measures, on the real API and for one model,
+  whether changing effort restarts the prompt cache.
 
 ### Fixes
 

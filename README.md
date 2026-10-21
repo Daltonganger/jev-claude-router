@@ -194,8 +194,9 @@ jev-claude-router:
   cache     1h writes · 201k context · fable→haiku pays below 3k
   tiers     haiku, sonnet, opus, fable
   announce  on, a line per turn
-  plan      max, every tier covered
+  plan      max, every tier covered — Fable is part of Max, within a share of the weekly limit; past it, usage credits
   catalog   fetched · data from 2026-10-21
+  models    fetched
   spent     $4.12 this session
 
   Recent turns, newest first:
@@ -472,6 +473,25 @@ reported in `/jev`.
 | `JEV_ROUTER_CATALOG` | on | `0` makes no request and uses the built-in tables. |
 | `JEV_ROUTER_CATALOG_URL` | this repo's `catalog.json` | Another catalog, e.g. your fork's. https only, and only from `raw.githubusercontent.com` unless `JEV_ROUTER_ALLOW_CUSTOM_CATALOG=1`. |
 | `JEV_ROUTER_CATALOG_TTL_HOURS` | `6` | How long a saved copy is used before fetching again. |
+
+**Model list**
+
+With `ANTHROPIC_API_KEY` set, the router reads Anthropic's model list
+(`GET https://api.anthropic.com/v1/models`, the key goes there and nowhere
+else) once a day and takes from it the window of each tier's model and the
+efforts it accepts: an effort the model does not take is sent as the nearest it
+does. A newer active model of a tier's line becomes that tier's model only when
+it has a price, in `catalog.json` or the built-in table; until then `/jev` says
+it is out and the router stays on the model it has. Moving to it mid-session is
+a model switch like any other, so the price check can hold it. The list is
+asked at session start with the catalog and shares its 0.8 s wait; a list that
+comes in later is saved for the next session and changes nothing in this one.
+Without a key (a Pro or Max login has none) nothing is asked and `catalog.json`
+covers the models.
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `JEV_ROUTER_MODEL_SYNC` | on with a key | `0` never asks for the list. |
 
 **Compaction**
 

@@ -25,8 +25,12 @@ import {
   upgradeMaxOf,
   offeredTiers,
   overrideAllowedOf,
+  PLAN_NOTES,
   planExclusions,
   planOf,
+  setEffortSupport,
+  setLadderModels,
+  MODEL_OF,
   parseOverride,
   sessionDecision,
   stickyOf,
@@ -40,7 +44,18 @@ import {
   type Effort,
   type Tier,
 } from "./policy.ts";
-import { tierOfModel, baseModel, sameModelAs, setOverlay, ttlOf, usageCost, type Ttl } from "./pricing.ts";
+import {
+  tierOfModel,
+  baseModel,
+  priceOfModel,
+  sameModelAs,
+  setOverlay,
+  setSyncedWindows,
+  ttlOf,
+  usageCost,
+  type Ttl,
+} from "./pricing.ts";
+import { adoptModels, loadModels, modelsLine, type Adoption, type ModelInfo, type ModelsResult } from "./models.ts";
 import {
   catalogLine,
   catalogOnOf,
@@ -339,8 +354,12 @@ type Settings = {
   plan: string | null;
   /** The tiers the plan leaves out; already part of `excluded` at the start of the session. */
   planExcluded: readonly Tier[];
+  /** What the plan means for them: the catalog's word, else the built-in note. */
+  planNote: string | null;
   /** The catalog: what has come in so far, and whether it is still on its way. */
   catalog: { result: LoadResult | null; loading: boolean };
+  /** The model list: what it found, what the ladder took from it, and why it was not asked. */
+  models: { result: ModelsResult | null; adoption: Adoption | null; state: "loading" | "no-key" | "off" | "ready" };
 };
 
 /**
@@ -349,6 +368,69 @@ type Settings = {
  * for the next session, and applies when it lands. Never a turn waiting on it.
  */
 export const CATALOG_WAIT_MS = 800;
+
+/**
+ * Starts the model list load and waits for it at most `CATALOG_WAIT_MS`. A
+ * list that comes in later is saved for the next session and changes nothing
+ * in this one: a model switched under a running session costs its cache.
+ */
+async function startModels(
+  $: Engine,
+  state: Settings["models"],
+  raw: { off: string | undefined; key: string | undefined },
+): Promise<ModelInfo[] | null> {
+  if (!catalogOnOf(raw.off)) {
+    state.state = "off";
+    return null;
+  }
+  // A key with a space or line break in it cannot go in a header.
+  const key = (raw.key ?? "").trim();
+  if (key === "" || !/^[\x21-\x7e]+$/.test(key)) {
+    state.state = "no-key";
+    return null;
+  }
+  state.state = "loading";
+  const loading = loadModels({
+    fetch: (u, init) => $.http.fetch(u, init),
+    sleep: (ms, options) => $.clock.sleep(ms, options),
+    store: $.store,
+    apiKey: key,
+  }).catch((): ModelsResult => ({ models: null, source: "none", notes: ["models: failed to load"] }));
+  const timer = new AbortController();
+  const waited = await Promise.race([
+    loading,
+    Promise.resolve($.clock.sleep(CATALOG_WAIT_MS, { signal: timer.signal })).then(
+      () => null,
+      () => new Promise<never>(() => {}),
+    ),
+  ]);
+  timer.abort();
+  if (waited === null) return null;
+  state.result = waited;
+  state.state = "ready";
+  return waited.models;
+}
+
+/**
+ * Puts the catalog and the model list into effect, in an order that lets each
+ * use the other: prices by id first, so the list can tell which newer models
+ * are priced; then the ladder's models, windows and efforts from the list;
+ * then the catalog again, so the ladder's prices follow the models it now has.
+ */
+function applySync(catalog: Catalog | null, models: ModelInfo[] | null, state: Settings["models"]): void {
+  setLadderModels(null);
+  setSyncedWindows(null);
+  setEffortSupport(null);
+  setOverlay(catalog === null ? null : overlayOf(catalog));
+  if (models !== null) {
+    const adoption = adoptModels(models, { ...MODEL_OF }, (id) => priceOfModel(id) !== null);
+    state.adoption = adoption;
+    setLadderModels(adoption.models);
+    setSyncedWindows(adoption.windows);
+    setEffortSupport(adoption.efforts);
+    if (catalog !== null) setOverlay(overlayOf(catalog));
+  }
+}
 
 /**
  * Starts the catalog load and waits for it at most `CATALOG_WAIT_MS`. Top
@@ -409,12 +491,21 @@ async function seedSettings(
   // the full ladder in `offered`, and `excluded` must agree with that or
   // `/jev` can end up saying a tier is both offered and excluded.
   const catalogState: Settings["catalog"] = { result: null, loading: false };
-  const catalog = await startCatalog($, catalogState, {
-    off: await $.env.get("JEV_ROUTER_CATALOG"),
-    url: await $.env.get("JEV_ROUTER_CATALOG_URL"),
-    allowCustom: await $.env.get("JEV_ROUTER_ALLOW_CUSTOM_CATALOG"),
-    ttl: await $.env.get("JEV_ROUTER_CATALOG_TTL_HOURS"),
-  });
+  const modelsState: Settings["models"] = { result: null, adoption: null, state: "off" };
+  // Both start at once and share the wait.
+  const [catalog, models] = await Promise.all([
+    startCatalog($, catalogState, {
+      off: await $.env.get("JEV_ROUTER_CATALOG"),
+      url: await $.env.get("JEV_ROUTER_CATALOG_URL"),
+      allowCustom: await $.env.get("JEV_ROUTER_ALLOW_CUSTOM_CATALOG"),
+      ttl: await $.env.get("JEV_ROUTER_CATALOG_TTL_HOURS"),
+    }),
+    startModels($, modelsState, {
+      off: await $.env.get("JEV_ROUTER_MODEL_SYNC"),
+      key: await $.env.get("ANTHROPIC_API_KEY"),
+    }),
+  ]);
+  applySync(catalog, models, modelsState);
   const plan = planOf(await $.env.get("JEV_ROUTER_PLAN"));
   const planExcluded = planExclusions(plan, plan === null ? undefined : catalog?.plans[plan]?.excludeLines);
   const tiers = tierFilter(
@@ -456,7 +547,9 @@ async function seedSettings(
     ),
     plan,
     planExcluded,
+    planNote: plan === null ? null : (catalog?.plans[plan]?.note ?? PLAN_NOTES[plan] ?? null),
     catalog: catalogState,
+    models: modelsState,
   };
 }
 
@@ -1699,7 +1792,9 @@ export function register(on: On) {
         spent,
         plan: settings.plan,
         planExcluded: settings.planExcluded,
+        planNote: settings.planNote,
         catalog: catalogLine(settings.catalog.result, settings.catalog.loading),
+        models: modelsLine(settings.models.result, settings.models.adoption, settings.models.state),
       }),
     };
   });

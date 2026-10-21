@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { ladderPrice, priceOfModel, sameModelAs, setOverlay, WINDOW_TOKENS } from "../hooks/pricing.ts";
+import { ladderPrice, priceOfModel, sameModelAs, setOverlay, setSyncedWindows, WINDOW_TOKENS } from "../hooks/pricing.ts";
+import { setEffortSupport, setLadderModels } from "../hooks/policy.ts";
 import { afterEach, describe, test } from "node:test";
 
 import { CATALOG_WAIT_MS, register } from "../hooks/register.ts";
@@ -44,6 +45,10 @@ function load(
   /** What the catalog URL answers: a body, "down" for an error, "hang" for no answer. */
   let catalogReply: unknown = "down";
   let catalogFetches = 0;
+  /** What the model list URL answers: a body, or "down" for an error. */
+  let modelsReply: unknown = "down";
+  let modelsFetches = 0;
+  let modelsKeySent: string | undefined;
 
   // Most register tests assume sticky off; production defaults sticky on.
   // Pass `JEV_ROUTER_STICKY: undefined` to exercise the real default.
@@ -59,7 +64,17 @@ function load(
     // Time passes only for the catalog wait, and only when the catalog is hanging.
     clock: { sleep: (ms?: number) => (ms === CATALOG_WAIT_MS && catalogReply === "hang" ? Promise.resolve() : new Promise<never>(() => {})) },
     http: {
-      fetch: async (url: string, init?: { body?: string }) => {
+      fetch: async (url: string, init?: { body?: string; headers?: Record<string, string> }) => {
+        if (url.startsWith("https://api.anthropic.com/v1/models")) {
+          modelsFetches++;
+          modelsKeySent = init?.headers?.["x-api-key"];
+          return {
+            ok: modelsReply !== "down",
+            status: modelsReply === "down" ? 401 : 200,
+            headers: {},
+            text: JSON.stringify(modelsReply),
+          };
+        }
         if (url.includes("raw.githubusercontent.com")) {
           catalogFetches++;
           if (catalogReply === "hang") return new Promise<never>(() => {});
@@ -155,6 +170,12 @@ function load(
       catalogReply = reply;
     },
     catalogFetches: () => catalogFetches,
+    /** What the model list URL answers from now on, how often it was asked, and the key it saw. */
+    setModels: (reply: unknown) => {
+      modelsReply = reply;
+    },
+    modelsFetches: () => modelsFetches,
+    modelsKeySent: () => modelsKeySent,
     /** What `$.session.model()` returns. */
     setSessionModel: (model: string) => {
       sessionModel = model;
@@ -5389,9 +5410,17 @@ describe("register: plan and catalog (2026-10-21)", () => {
   test("pro leaves out fable: Jev is not offered it, and the report says why", async () => {
     const kit = await started({ JEV_ROUTER_PLAN: "pro" });
     const r = await report(kit);
-    assert.match(r, /plan\s+pro, does not cover fable/);
+    assert.match(r, /plan\s+pro, does not cover fable — Fable is not in Pro's usage limits: it runs on pay-as-you-go usage credits/);
     assert.match(r, /tiers\s+haiku, sonnet, opus\n/);
     assert.match(r, /excluded\s+fable/);
+  });
+
+  test("the catalog can word the plan note itself", async () => {
+    const kit = await started(
+      { JEV_ROUTER_PLAN: "pro", JEV_ROUTER_CATALOG: undefined },
+      file({ plans: { pro: { excludeLines: ["fable"], note: "ask finance first" } } }),
+    );
+    assert.match(await report(kit), /plan\s+pro, does not cover fable — ask finance first/);
   });
 
   test("max and api cover every tier, and a plan nobody knows leaves nothing out", async () => {
@@ -5474,5 +5503,137 @@ describe("register: plan and catalog (2026-10-21)", () => {
     const kit = await started({ JEV_ROUTER_CATALOG: undefined, JEV_ROUTER_CATALOG_URL: "https://example.com/c.json" }, file());
     assert.equal(kit.catalogFetches(), 0);
     assert.match(await report(kit), /not allowlisted/);
+  });
+});
+
+describe("register: the model list (2026-10-21)", () => {
+  const yes = { supported: true };
+  const listed = (id: string, line: string, created: string, over: Record<string, unknown> = {}) => ({
+    id,
+    display_name: id,
+    created_at: created,
+    lifecycle: "active",
+    line,
+    max_input_tokens: 1_000_000,
+    capabilities: { effort: { supported: true, low: yes, medium: yes, high: yes, xhigh: yes, max: yes } },
+    ...over,
+  });
+  const current = () => ({
+    data: [
+      listed("claude-haiku-5-5", "haiku", "2026-10-07T00:00:00Z"),
+      listed("claude-sonnet-5-5", "sonnet", "2026-09-28T00:00:00Z"),
+      listed("claude-opus-5-5", "opus", "2026-09-21T00:00:00Z"),
+      listed("claude-fable-5-1", "fable", "2026-09-01T00:00:00Z"),
+    ],
+    has_more: false,
+    last_id: null,
+  });
+  const withNewOpus = () => ({ ...current(), data: [...current().data, listed("claude-opus-6", "opus", "2026-11-01T00:00:00Z")] });
+  const catalogWithOpus6 = {
+    schema: 1,
+    updated: "2026-11-02",
+    models: { "claude-opus-6": { line: "opus", price: { input: 4, write5m: 5, write1h: 8, read: 0.2, output: 20 } } },
+    plans: {},
+    deciders: {},
+  };
+
+  const started = async (over: Record<string, string | undefined> = {}, models?: unknown, catalog?: unknown) => {
+    const kit = load({ AI_GATEWAY_API_KEY: "gw-key", ...over });
+    if (models !== undefined) kit.setModels(models);
+    if (catalog !== undefined) kit.setCatalog(catalog);
+    await kit.hooks.get("session.start")!(kit.$, {}, async (e: unknown) => e);
+    return kit;
+  };
+  type Kit = Awaited<ReturnType<typeof started>>;
+  const report = async (kit: Kit) =>
+    (await kit.hooks.get('command.run:{"command":"jev"}')!(kit.$, { args: "" })).text as string;
+  async function turn(kit: Kit, id: string, text = "implement it") {
+    await kit.hooks.get("turn.start")!(kit.$, { text, turnId: id }, async (e: unknown) => e);
+    let sent: { model?: string; effort?: string } = {};
+    await collect(
+      kit.hooks.get("turn.step")!(kit.$, { turnId: id, index: 0 }, (e: { model: string; effort: string }) => {
+        sent = e;
+        return answeredBy(e.model ?? "claude-opus-5-5");
+      }),
+    );
+    return sent;
+  }
+  afterEach(() => {
+    setOverlay(null);
+    setLadderModels(null);
+    setEffortSupport(null);
+    setSyncedWindows(null);
+  });
+
+  test("without ANTHROPIC_API_KEY nothing is asked, and /jev says what to do", async () => {
+    const kit = await started({}, current());
+    assert.equal(kit.modelsFetches(), 0);
+    assert.match(await report(kit), /models\s+not synced: needs ANTHROPIC_API_KEY/);
+  });
+
+  test("with a key the list is fetched once, from api.anthropic.com, with that key", async () => {
+    const kit = await started({ ANTHROPIC_API_KEY: "sk-ant-test" }, current());
+    assert.equal(kit.modelsFetches(), 1);
+    assert.equal(kit.modelsKeySent(), "sk-ant-test");
+    assert.match(await report(kit), /models\s+fetched\n/);
+  });
+
+  test("JEV_ROUTER_MODEL_SYNC=0 asks nothing", async () => {
+    const kit = await started({ ANTHROPIC_API_KEY: "sk-ant-test", JEV_ROUTER_MODEL_SYNC: "0" }, current());
+    assert.equal(kit.modelsFetches(), 0);
+    assert.match(await report(kit), /models\s+off \(JEV_ROUTER_MODEL_SYNC=0\)/);
+  });
+
+  test("a key that cannot go in a header is not sent", async () => {
+    const kit = await started({ ANTHROPIC_API_KEY: "sk bad\nkey" }, current());
+    assert.equal(kit.modelsFetches(), 0);
+  });
+
+  test("a newer opus with a price is the opus tier from the first turn, and later it is a switch like any other", async () => {
+    const kit = await started(
+      { ANTHROPIC_API_KEY: "k", JEV_ROUTER_CATALOG: undefined },
+      withNewOpus(),
+      catalogWithOpus6,
+    );
+    assert.match(await report(kit), /models\s+fetched · opus: claude-opus-5-5 → claude-opus-6/);
+    kit.setTier("opus", 0.95, 2);
+    // Nothing is warm yet, so the move to the new model has no cache to cost.
+    kit.setContext(null);
+    const sent1 = await turn(kit, "m1");
+    assert.equal(sent1.model, "claude-opus-6");
+    assert.equal(priceOfModel("claude-opus-6")?.output, 20);
+    // Mid-session, with a warm cache on the old model, moving costs a rewrite and the price check holds it.
+    const warm = await started({ ANTHROPIC_API_KEY: "k", JEV_ROUTER_CATALOG: undefined }, withNewOpus(), catalogWithOpus6);
+    warm.setTier("opus", 0.95, 2);
+    assert.equal((await turn(warm, "m1b")).model, "claude-opus-5-5");
+  });
+
+  test("a newer opus with no price is left alone, and /jev says it is out", async () => {
+    const kit = await started({ ANTHROPIC_API_KEY: "k" }, withNewOpus());
+    assert.match(await report(kit), /claude-opus-6 is out but has no price yet; staying on claude-opus-5-5/);
+    kit.setTier("opus", 0.95, 2);
+    assert.equal((await turn(kit, "m2")).model, "claude-opus-5-5");
+  });
+
+  test("an effort the model does not accept is not sent", async () => {
+    const data = current().data.map((m) =>
+      m.id === "claude-sonnet-5-5"
+        ? { ...m, capabilities: { effort: { supported: true, low: yes, medium: yes, high: yes, max: yes, xhigh: null } } }
+        : m,
+    );
+    const kit = await started({ ANTHROPIC_API_KEY: "k", JEV_ROUTER_CEILING: "max" }, { ...current(), data });
+    kit.setTier("sonnet", 0.95, 3);
+    const sent = await turn(kit, "m3");
+    assert.equal(sent.model, "claude-sonnet-5-5");
+    assert.equal(sent.effort, "high", "xhigh is not one of sonnet's levels");
+  });
+
+  test("a list that cannot be fetched leaves the built-in models and says so, without the key", async () => {
+    const kit = await started({ ANTHROPIC_API_KEY: "sk-ant-secret" }, "down");
+    const r = await report(kit);
+    assert.match(r, /models\s+none, the built-in tables answer · HTTP 401/);
+    assert.ok(!r.includes("sk-ant-secret"));
+    kit.setTier("opus", 0.95, 2);
+    assert.equal((await turn(kit, "m4")).model, "claude-opus-5-5");
   });
 });

@@ -217,9 +217,16 @@ export function fitsWindow(tier: Tier, contextTokens: number): boolean {
   return contextTokens + WINDOW_HEADROOM_TOKENS <= windowOf(tier);
 }
 
-/** A tier's window: the catalog's when it has one, else the built-in. */
+let syncedWindows: Partial<Record<Tier, number>> = {};
+
+/** The windows the model list reported, for the tiers it named; null forgets them. */
+export function setSyncedWindows(windows: Partial<Record<Tier, number>> | null): void {
+  syncedWindows = windows ?? {};
+}
+
+/** A tier's window: the catalog's when it has one, else the model list's, else the built-in. */
 export function windowOf(tier: Tier): number {
-  return overlay?.windows[tier] ?? WINDOW_TOKENS[tier];
+  return overlay?.windows[tier] ?? syncedWindows[tier] ?? WINDOW_TOKENS[tier];
 }
 
 /** `claude-opus-5-5[1m]` and `claude-opus-5-5` are one model: the suffix is the engine's. */

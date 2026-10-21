@@ -119,6 +119,17 @@ export const MODEL_OF: Record<Tier, string> = {
   fable: "claude-fable-5-1",
 };
 
+const BUILTIN_MODEL_OF: Record<Tier, string> = { ...MODEL_OF };
+
+/**
+ * Points tiers at other models (a newer one the model list found and the
+ * catalog prices), or back at the built-in ones with null. Changes the
+ * record in place: it is read everywhere as `MODEL_OF[tier]`.
+ */
+export function setLadderModels(models: Partial<Record<Tier, string>> | null): void {
+  for (const tier of TIERS) MODEL_OF[tier] = models?.[tier] ?? BUILTIN_MODEL_OF[tier];
+}
+
 /**
  * What Jev is told each tier is for. This is the policy: edit these lines to
  * change how the router behaves, and nothing else.
@@ -183,6 +194,17 @@ export const PLAN_EXCLUDES: Record<string, readonly Tier[]> = {
   pro: ["fable"],
   max: [],
   api: [],
+};
+
+/**
+ * What a plan means for the tiers it leaves out, from Anthropic's support
+ * article "Claude Fable models on your plan" (support.claude.com, article
+ * 15424964, read 2026-10-21). Shown in `/jev`; `catalog.json` can replace it.
+ */
+export const PLAN_NOTES: Record<string, string> = {
+  pro: "Fable is not in Pro's usage limits: it runs on pay-as-you-go usage credits from the first token",
+  max: "Fable is part of Max, within a share of the weekly limit; past it, usage credits",
+  api: "billed at API rates",
 };
 
 /** `JEV_ROUTER_PLAN`, lowercased, or null when unset or blank. */
@@ -1028,11 +1050,35 @@ export function withCeiling(
   return next;
 }
 
-/** Caps a decision's effort at its tier's ceiling, keeping what Jev named. */
+let effortSupport: Partial<Record<Tier, readonly Effort[]>> = {};
+
+/** The efforts each tier's model accepts, from the model list; null forgets them. */
+export function setEffortSupport(support: Partial<Record<Tier, readonly Effort[]>> | null): void {
+  effortSupport = support ?? {};
+}
+
+/**
+ * `effort`, or the nearest level the tier's model accepts: the highest below
+ * it, else the lowest above. A tier the list said nothing about takes any.
+ */
+export function supportedEffort(tier: Tier, effort: Effort): Effort {
+  const levels = effortSupport[tier];
+  if (levels === undefined || levels.length === 0 || levels.includes(effort)) return effort;
+  const rank = effortRank(effort);
+  const below = [...levels].filter((l) => effortRank(l) < rank).sort((a, b) => effortRank(b) - effortRank(a))[0];
+  return below ?? [...levels].sort((a, b) => effortRank(a) - effortRank(b))[0] ?? effort;
+}
+
+/**
+ * Caps a decision's effort at its tier's ceiling, keeping what Jev named, and
+ * moves it to a level the tier's model accepts.
+ */
 export function capTo(decision: Decision, ceiling: Ceiling): Decision {
   const cap = ceiling[decision.tier];
-  if (effortRank(decision.effort) <= effortRank(cap)) return decision;
-  return { ...decision, effort: cap, cappedEffort: decision.effort };
+  const capped = effortRank(decision.effort) <= effortRank(cap) ? decision.effort : cap;
+  const effort = supportedEffort(decision.tier, capped);
+  if (effort === decision.effort) return decision;
+  return { ...decision, effort, cappedEffort: decision.effort };
 }
 
 /**

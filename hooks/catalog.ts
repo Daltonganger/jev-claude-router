@@ -14,6 +14,7 @@
  * in as arguments.
  */
 
+import { fetchText } from "./fetchtext.ts";
 import type { HttpInitLike, HttpResponseLike } from "./jev.ts";
 import { MODEL_OF, TIERS } from "./policy.ts";
 import { priceAt, type Overlay, type Price, type PriceTier } from "./pricing.ts";
@@ -62,7 +63,7 @@ export type CatalogModel = {
   priceTiers?: PriceTier[];
 };
 
-export type CatalogPlan = { excludeLines: string[] };
+export type CatalogPlan = { excludeLines: string[]; note?: string };
 
 /** The model ids a decider is reachable under; which host serves them is not the catalog's to say. */
 export type CatalogDecider = Record<string, string>;
@@ -182,7 +183,10 @@ export function parseCatalog(raw: unknown): ParseResult {
       !lines.every((l) => typeof l === "string" && WORD.test(l))
     )
       dropped.push(`plan ${name.slice(0, 60)}`);
-    else plans[name] = { excludeLines: [...lines] as string[] };
+    else {
+      const note = isRecord(entry) && typeof entry.note === "string" ? entry.note.replace(/\s+/g, " ").trim().slice(0, 200) : "";
+      plans[name] = { excludeLines: [...lines] as string[], ...(note !== "" ? { note } : {}) };
+    }
   }
 
   const deciders: Record<string, CatalogDecider> = {};
@@ -338,38 +342,6 @@ function cachedCatalog(saved: Saved | null, url: string): Catalog | null {
   return parsed.ok ? parsed.catalog : null;
 }
 
-async function fetchText(args: LoadArgs): Promise<{ ok: true; text: string } | { ok: false; reason: string }> {
-  const timeoutMs = args.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
-  const controller = new AbortController();
-  const timer = new AbortController();
-  const TIMED_OUT = Symbol("timed-out");
-  // Started inside an async function, so a fetch that throws at once is a rejection handled below.
-  const call = (async () =>
-    args.fetch(args.url, { method: "GET", headers: { accept: "application/json" }, signal: controller.signal }))();
-  try {
-    const raced = await Promise.race([
-      call,
-      args.sleep(timeoutMs, { signal: timer.signal }).then(
-        () => TIMED_OUT,
-        () => new Promise<never>(() => {}),
-      ),
-    ]);
-    if (raced === TIMED_OUT) {
-      controller.abort();
-      void call.catch(() => undefined);
-      return { ok: false, reason: `timed out after ${timeoutMs}ms` };
-    }
-    const response = raced as HttpResponseLike;
-    if (!response) return { ok: false, reason: "no response" };
-    if (!response.ok) return { ok: false, reason: `HTTP ${response.status}` };
-    return { ok: true, text: response.text };
-  } catch {
-    return { ok: false, reason: "request failed" };
-  } finally {
-    timer.abort();
-  }
-}
-
 /**
  * The catalog to use this session. A copy still in date is returned without a
  * request. Otherwise it is fetched, checked, and saved; when that fails the
@@ -410,7 +382,13 @@ export async function loadCatalog(args: LoadArgs): Promise<LoadResult> {
     return stale(reason);
   };
 
-  const body = await fetchText(args);
+  const body = await fetchText({
+    fetch: args.fetch,
+    sleep: args.sleep,
+    url: args.url,
+    headers: { accept: "application/json" },
+    timeoutMs: args.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS,
+  });
   if (!body.ok) return failed(body.reason);
 
   let json: unknown;

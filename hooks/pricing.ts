@@ -229,6 +229,39 @@ export function windowOf(tier: Tier): number {
   return overlay?.windows[tier] ?? syncedWindows[tier] ?? WINDOW_TOKENS[tier];
 }
 
+/**
+ * Whether changing effort between requests leaves the model's prompt cache
+ * alone. A model with per-message effort takes the change in a system message
+ * after the cached prefix; any other restarts the cache from the changed
+ * message on (platform.claude.com, "Effort" and "Prompt caching", 2026-10-21).
+ * Per-message effort exists on Fable 5.1, Opus 5.5, Opus 5, Sonnet 5.5 and
+ * Haiku 5.5 on the Claude API and Google Cloud, and on Fable 5.1, Mythos 5.1
+ * and Opus 5.5 on Amazon Bedrock. Measured through this plugin in Claude Code
+ * 2.1.306: Haiku 5.5 and Sonnet 5.5 keep the cache across effort changes.
+ * Sonnet 5 does not (measured 2026-09-22, and the docs list no per-message
+ * effort for it); an id the table does not know is assumed not to.
+ */
+export function effortKeepsCache(model: string): boolean {
+  if (typeof model !== "string") return false;
+  const bedrock = /^(?:[a-z]{2,}\.)*anthropic\./.test(model.toLowerCase());
+  const id = model
+    .toLowerCase()
+    .replace(/\[[^\]]*\]$/, "")
+    .replace(/^(?:[a-z]{2,}\.)*anthropic\./, "")
+    .replace(/-v\d+(?::\d+)?$/, "")
+    .replace(/@\d{8}$/, "")
+    .replace(/-\d{8}$/, "");
+  if (bedrock) return ["claude-fable-5-1", "claude-mythos-5-1", "claude-opus-5-5"].includes(id);
+  return [
+    "claude-fable-5-1",
+    "claude-mythos-5-1",
+    "claude-opus-5-5",
+    "claude-opus-5",
+    "claude-sonnet-5-5",
+    "claude-haiku-5-5",
+  ].includes(id);
+}
+
 /** `claude-opus-5-5[1m]` and `claude-opus-5-5` are one model: the suffix is the engine's. */
 export function baseModel(model: string): string {
   // By hand, not `/\[[^\]]*\]$/`, which rescans to the end from every `[`.

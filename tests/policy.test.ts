@@ -461,6 +461,8 @@ describe("effort on Sonnet", () => {
     confidence: 0.9,
     effortConfidence,
   });
+  /** The same decision on Sonnet 5, whose effort change restarts the cache. */
+  const sonnet5 = (d: Decision): Decision => ({ ...d, model: "claude-sonnet-5" });
 
   test("the effort answer’s own confidence is read, not the tier’s", () => {
     const d = decisionOf({
@@ -478,14 +480,22 @@ describe("effort on Sonnet", () => {
 
   test("a shaky effort change while staying on Sonnet is held", () => {
     assert.equal(
-      holdsSonnetEffort(on("sonnet", "high", 0.49), on("sonnet", "low", 0.9), 0.75),
+      holdsSonnetEffort(on("sonnet", "high", 0.49), sonnet5(on("sonnet", "low", 0.9)), 0.75),
       true,
     );
   });
 
+  test("on Sonnet 5.5 the same change is not held: its effort change keeps the cache", () => {
+    assert.equal(
+      holdsSonnetEffort(on("sonnet", "high", 0.49), on("sonnet", "low", 0.9), 0.75),
+      false,
+    );
+    assert.equal(on("sonnet", "low", 0.9).model, "claude-sonnet-5-5");
+  });
+
   test("held in both directions: a rise would ratchet a stretch upward", () => {
     assert.equal(
-      holdsSonnetEffort(on("sonnet", "low", 0.49), on("sonnet", "high", 0.9), 0.75),
+      holdsSonnetEffort(on("sonnet", "low", 0.49), sonnet5(on("sonnet", "high", 0.9)), 0.75),
       true,
     );
   });
@@ -852,7 +862,7 @@ describe("policy: audit regressions (2026-09-28)", () => {
 });
 
 describe("holdsSonnetEffort under a ceiling (2026-09-28)", () => {
-  const on = (effort: Effort, effortConfidence: number): Decision => ({ tier: "sonnet", model: "claude-sonnet-5-5", effort, confidence: 0.9, effortConfidence });
+  const on = (effort: Effort, effortConfidence: number): Decision => ({ tier: "sonnet", model: "claude-sonnet-5", effort, confidence: 0.9, effortConfidence });
   test("an effort the ceiling now cuts is not held: it changes either way", () => {
     const ceiling = { ...ceilingAt("max"), sonnet: "medium" as const };
     assert.equal(holdsSonnetEffort(on("low", 0.3), on("xhigh", 0.9), 0.75, ceiling), false);

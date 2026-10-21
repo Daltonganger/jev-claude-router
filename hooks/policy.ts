@@ -7,6 +7,7 @@
  */
 
 import { sameModelAs,
+  effortKeepsCache,
   baseModel,
   fitsWindow,
   tierOfModel,
@@ -931,11 +932,12 @@ export function forcedDecision(tier: Tier, fresh: Decision | null): Decision {
  * Whether a turn staying on Sonnet should keep the previous turn's effort.
  *
  * Measured 2026-09-22 on one session at ~58k context: an effort change on
- * Opus 5.5 and Haiku 4.5 costs nothing (the engine sends it per turn; not
- * yet measured on Haiku 5.5, which is assumed to behave the same), but
+ * Opus 5.5 and Haiku 4.5 costs nothing (the engine sends it per turn), but
  * on Sonnet 5 it rewrites everything after the system block, about half the
- * prefix, $0.12 at that size. So on Sonnet an effort flip is a cache miss
- * and gets the same treatment as a model switch: it has to clear the bar.
+ * prefix, $0.12 at that size. So on a Sonnet whose effort change restarts the
+ * cache an effort flip is a cache miss and gets the same treatment as a model
+ * switch: it has to clear the bar. Sonnet 5.5 is not one (see
+ * `effortKeepsCache`): its effort moves freely, and this holds nothing.
  *
  * The bar is read against Jev's confidence in the effort score, not the
  * tier, because the two are separate answers and the effort one is the
@@ -956,6 +958,8 @@ export function holdsSonnetEffort(
   if (previous === null) return false;
   if (fresh.tier !== "sonnet" || previous.tier !== "sonnet") return false;
   if (fresh.effort === previous.effort) return false;
+  // Nothing to protect where an effort change keeps the cache.
+  if (effortKeepsCache(previous.model)) return false;
   if (ceiling !== undefined && effortRank(previous.effort) > effortRank(ceiling.sonnet)) return false;
   return (fresh.effortConfidence ?? 0) < threshold;
 }

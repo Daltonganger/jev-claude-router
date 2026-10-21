@@ -35,6 +35,11 @@
 
 ### Fixes
 
+- **A shaky effort change on Sonnet 5.5 goes through.** The hold that keeps
+  Sonnet's last effort when Jev is unsure only applies where an effort change
+  restarts the prompt cache (Sonnet 5 and older); on Sonnet 5.5, which takes
+  the change after the cached prefix, nothing is held. Checked through the
+  plugin in Claude Code 2.1.306.
 - **The plugin loads again.** The catalog and model-list loaders passed `$.store`
   as a value, which the engine's loader rejects (`claude plugin validate` fails and
   nothing is routed). They call it instead, and a test keeps it that way.

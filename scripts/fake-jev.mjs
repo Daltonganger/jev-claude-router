@@ -2,7 +2,8 @@
  * A stand-in for Jev, for driving the real plugin without a TypeSafe key.
  * It answers /v1/systemone over https with the tier and effort the prompt
  * asks for: `[[t=haiku]]` picks the tier (sonnet by default) and `[[e=0..4]]`
- * the effort score (low … max; 2 by default). Confidence is 0.99.
+ * the effort score (low … max; 2 by default). `[[c=0.3]]` sets the effort
+ * confidence (0.99 by default); the tier's confidence is always 0.99.
  *
  *   node scripts/fake-jev.mjs <dir>     # <dir> holds key.pem and cert.pem; writes <dir>/jev.log
  */
@@ -30,6 +31,8 @@ https
       const t = /\[\[t=(\w+)\]\]/.exec(state);
       const tier = t ? t[1] : "sonnet";
       const score = e ? Number(e[1]) : 2;
+      const c = /\[\[c=([\d.]+)\]\]/.exec(state);
+      const effortConfidence = c ? Number(c[1]) : 0.99;
       const offered = Object.keys(body.questions?.tier?.criteria ?? {});
       log({ url: req.url, tier, score, offered, state: state.slice(0, 80) });
       const probs = Object.fromEntries(offered.map((o) => [o, o === tier ? 0.99 : 0.01 / Math.max(1, offered.length - 1)]));
@@ -38,7 +41,7 @@ https
         JSON.stringify({
           answers: {
             tier: { type: "choice", choice: tier, confidence: 0.99, probabilities: probs },
-            effort: { type: "score", score, confidence: 0.99 },
+            effort: { type: "score", score, confidence: effortConfidence },
           },
         }),
       );

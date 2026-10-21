@@ -10,6 +10,8 @@
 # line says which effort the plugin sent; `read` and `written` are the prompt
 # cache. An effort change that restarts the cache reads ~0 and writes the whole
 # prompt (as the call after the first resume sometimes does whatever the effort).
+# Step 8 asks for a change Jev is only 30% sure of: on a model whose effort change keeps the
+# cache it must go through (effort low); on one that restarts it, the plugin keeps the last.
 set -u
 model=${1:-claude-haiku-5-5}
 tier=${2:-haiku}
@@ -60,3 +62,5 @@ step "4 e=1 -> e=3" "[[t=$tier]][[e=3]] Go." --resume "$id"
 step "5 control (e=3)" "[[t=$tier]][[e=3]] Go." --resume "$id"
 step "6 e=3 -> e=0" "[[t=$tier]][[e=0]] Go." --resume "$id"
 step "7 e=0 -> e=4" "[[t=$tier]][[e=4]] Go." --resume "$id"
+# A shaky effort answer (30% sure): held to the previous effort only where a change would cost the cache.
+step "8 e=4 -> e=0, 30% sure" "[[t=$tier]][[e=0]][[c=0.3]] Go." --resume "$id"

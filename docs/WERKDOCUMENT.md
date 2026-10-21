@@ -186,8 +186,10 @@ effort die de routeregel noemt, en de cache blijft staan.
 
 Ook hier las de aanroep direct na de eerste `--resume` soms 0 en schreef hij de hele prompt, bij gelijke
 effort; geen effort-effect. Conclusie: voor Haiku 5.5 en Sonnet 5.5 kost een effort-wijziging via de
-plugin de cache niet. `holdsSonnetEffort` (gemeten op Sonnet 5) houdt zo'n wijziging vast zonder dat er
-een cache te sparen valt; dat kan voor Sonnet 5.5 uit. Nog niet gedaan.
+plugin de cache niet. `holdsSonnetEffort` (gemeten op Sonnet 5) hield zo'n wijziging vast zonder dat er
+een cache te sparen viel. **Gedaan:** de hold geldt nu alleen voor modellen zonder per-bericht-effort
+(`effortKeepsCache` in `pricing.ts`: Sonnet 5 en ouder, en Sonnet 5.5 / Haiku 5.5 op Bedrock). Via de
+plugin gecontroleerd: een effort-wijziging waar Jev maar 30% zeker van is, gaat op Sonnet 5.5 door.
 
 Bij deze meting bleek ook dat de plugin in Claude Code 2.1.306 niet laadde: `claude plugin validate`
 weigerde `register.ts`, omdat de lader van catalogus en modellijst `$.store` als waarde doorgaf (de

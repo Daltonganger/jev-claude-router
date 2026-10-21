@@ -1176,13 +1176,28 @@ describe("register: effort on Sonnet", () => {
     };
   }
 
-  test("a shaky effort change while staying on Sonnet keeps the last effort", async () => {
+  test("on Sonnet 5.5 a shaky effort change goes through: its effort change keeps the cache", async () => {
     const { hooks, $, setTier } = await started();
+    setTier("sonnet", 0.9, 1, 0.9);
+    await turn(hooks, $, "s1a");
+    setTier("sonnet", 0.9, 3, 0.49);
+    const t = await turn(hooks, $, "s2a");
+    assert.equal(t.sent.model, "claude-sonnet-5-5");
+    assert.equal(t.sent.effort, "xhigh");
+    assert.doesNotMatch(t.text, /kept/);
+  });
+
+  test("a shaky effort change while staying on Sonnet 5 keeps the last effort", async () => {
+    // Sonnet 5 has no per-message effort: an effort change rewrites its cache.
+    const { hooks, $, setTier } = await started();
+    // After the session starts: starting it points the tiers at the built-in models again.
+    setLadderModels({ sonnet: "claude-sonnet-5" });
     setTier("sonnet", 0.9, 1, 0.9);
     await turn(hooks, $, "s1");
     setTier("sonnet", 0.9, 3, 0.49);
     const t = await turn(hooks, $, "s2");
-    assert.equal(t.sent.model, "claude-sonnet-5-5");
+    setLadderModels(null);
+    assert.equal(t.sent.model, "claude-sonnet-5");
     assert.equal(t.sent.effort, "medium", "the previous effort, not xhigh");
     assert.match(t.text, /sonnet · medium · Jev 90% · kept medium: Jev 49% on xhigh/);
   });
@@ -2625,15 +2640,17 @@ describe("register: audit regressions (2026-09-23)", () => {
     assert.doesNotMatch((await run(kit.hooks, kit.$, "")).text, /2\+2/, "the other session's history did not carry over");
   });
 
-  test("a turn held on Sonnet by the window guard still goes through the Sonnet effort hold", async () => {
+  test("a turn held on Sonnet 5 by the window guard still goes through the Sonnet effort hold", async () => {
     const { hooks, $, setTier, setContext } = await boot();
+    setLadderModels({ sonnet: "claude-sonnet-5" });
     setContext(1_000);
     setTier("sonnet", 0.95, 1, 0.9);
-    assert.equal((await turn(hooks, $, "sw1", "a small edit")).sent.model, "claude-sonnet-5-5");
+    assert.equal((await turn(hooks, $, "sw1", "a small edit")).sent.model, "claude-sonnet-5");
     setContext(190_000);
     setTier("haiku", 0.99, 0, 0.1);
     const t = await turn(hooks, $, "sw2", "2+2");
-    assert.equal(t.sent.model, "claude-sonnet-5-5");
+    setLadderModels(null);
+    assert.equal(t.sent.model, "claude-sonnet-5");
     assert.equal(t.sent.effort, "medium", "effort held on Sonnet");
   });
 

@@ -4,6 +4,7 @@ import { afterEach, describe, test } from "node:test";
 import {
   baseModel,
   breakEvenTokens,
+  effortKeepsCache,
   fitsWindow,
   isDowngrade,
   ladderPrice,
@@ -302,5 +303,24 @@ describe("the catalog overlay", () => {
     setOverlay({ models: new Map(), ladder: { opus: { ...PRICE.opus, write1h: 80 } }, windows: {} });
     const after = switchVerdict("fable", "opus", 50_000, 1_500);
     assert.ok(after.go > before.go);
+  });
+});
+
+describe("effortKeepsCache", () => {
+  test("models with per-message effort keep the cache across an effort change", () => {
+    for (const id of ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5-5[1m]", "claude-sonnet-5-5@20261001", "CLAUDE-HAIKU-5-5"])
+      assert.equal(effortKeepsCache(id), true, id);
+  });
+
+  test("the rest restart it, and an id nobody listed is assumed to", () => {
+    for (const id of ["claude-sonnet-5", "claude-sonnet-4-6", "claude-haiku-4-5", "claude-fable-5", "claude-opus-4-8", "claude-new-9", "", "<synthetic>"])
+      assert.equal(effortKeepsCache(id), false, id);
+  });
+
+  test("on Bedrock only Fable 5.1, Mythos 5.1 and Opus 5.5 have it", () => {
+    assert.equal(effortKeepsCache("anthropic.claude-opus-5-5"), true);
+    assert.equal(effortKeepsCache("us.anthropic.claude-opus-5-5-v1:0"), true);
+    assert.equal(effortKeepsCache("anthropic.claude-sonnet-5-5"), false);
+    assert.equal(effortKeepsCache("anthropic.claude-haiku-5-5"), false);
   });
 });

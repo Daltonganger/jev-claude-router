@@ -617,8 +617,8 @@ export function attemptOf(
       skipped: "Jev answered but named no tier we offered",
     };
   }
-  // First of all, can the tier take a prompt this long? Haiku's window is
-  // 200k; a turn carrying more is refused by the API, forced or not.
+  // First of all, can the tier take a prompt this long? A turn carrying more
+  // than its window is refused by the API, forced or not.
   if (hold.economics !== undefined) {
     const fits = withinWindow(
       decision,

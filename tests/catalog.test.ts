@@ -355,7 +355,9 @@ describe("catalog.json in the repo", () => {
       assert.ok(model, `${MODEL_OF[tier]} is in the catalog`);
       assert.strictEqual(model.line, tier);
       assert.strictEqual(model.maxInputTokens, WINDOW_TOKENS[tier]);
-      assert.deepStrictEqual(model.price, PRICE[tier]);
+      const { tiers, ...flat } = PRICE[tier];
+      assert.deepStrictEqual(model.price, flat);
+      assert.deepStrictEqual(model.priceTiers ?? [], tiers ?? []);
     }
   });
 

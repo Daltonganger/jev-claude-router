@@ -52,7 +52,7 @@ The four tiers:
 
 | Tier | For | Model |
 | --- | --- | --- |
-| `haiku` | Trivial: a lookup, a rename, a yes or no. | `claude-haiku-4-5` |
+| `haiku` | Trivial: a lookup, a rename, a yes or no. | `claude-haiku-5-5` |
 | `sonnet` | Straightforward and minor, no real decision to make. | `claude-sonnet-5-5` |
 | `opus` | Plain implementation carrying some complexity. | `claude-opus-5-5` |
 | `fable` | Planning, brainstorming, architecture, systematic debugging. | `claude-fable-5-1` |
@@ -169,7 +169,7 @@ one summary, written once every agent has finished:
 
 ```
 3 turns: fable, fable, fable (2 woken by tasks) · $6.16 · 7.4M in (99% cached) · 61k out
-agents: Explore haiku-4-5 $0.029, general-purpose opus-5-5 $0.36
+agents: Explore haiku-5-5 $0.0029, general-purpose opus-5-5 $0.36
 turn 2: kept fable: haiku costs $4.41 vs $0.13
 ```
 
@@ -253,12 +253,16 @@ last route.
 
 ### 2. The window guard
 
-A turn is never sent to a tier whose context window it does not fit. Haiku
-4.5 takes 200k tokens and the other tiers a million, less 16k of headroom.
+A turn is never sent to a tier whose context window it does not fit. Every
+tier on the ladder takes a million tokens, less 16k of headroom. (Haiku 4.5
+took 200k, which is what this guard was written for; it still applies to any
+tier with a smaller window.) Haiku 5.5 takes the full window, but a request
+whose prompt is over 100k tokens pays its higher prices, and the cost checks
+count that.
 This applies whatever Jev said, and even to a tier you named: the turn stays
 on the tier already running.
 
-When the running tier is the one that no longer fits (haiku past 184k), the
+When the running tier is the one that no longer fits (a tier past its window less the headroom), the
 turn moves up only as far as it must, to the cheapest offered tier that
 fits. That holds whether Jev picked haiku again, picked a higher tier the
 checks below held back, or the turn was a go-ahead. Because the running

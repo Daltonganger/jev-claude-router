@@ -7,6 +7,7 @@ import {
   fitsWindow,
   isDowngrade,
   PRICE,
+  priceAt,
   priceOfModel,
   switchVerdict,
   ttlOf,
@@ -16,13 +17,19 @@ import {
 
 describe("pricing", () => {
   test("the list matches Anthropic’s page for the four ladder models", () => {
-    // platform.claude.com/docs/en/about-claude/pricing, 2026-09-23
+    // platform.claude.com/docs/en/about-claude/pricing, 2026-10-21
     assert.deepEqual(PRICE.haiku, {
-      input: 1,
-      write5m: 1.25,
-      write1h: 2,
-      read: 0.1,
-      output: 5,
+      input: 0.1,
+      write5m: 0.125,
+      write1h: 0.2,
+      read: 0.01,
+      output: 0.5,
+      tiers: [
+        {
+          abovePromptTokens: 100_000,
+          price: { input: 0.5, write5m: 0.625, write1h: 1, read: 0.05, output: 2.5 },
+        },
+      ],
     });
     assert.deepEqual(PRICE.fable, {
       input: 10,
@@ -33,10 +40,24 @@ describe("pricing", () => {
     });
     assert.equal(PRICE.opus.read, 0.2);
     assert.equal(PRICE.sonnet.write1h, 4);
+    // Cache hits on Sonnet 5.5 and Opus 5.5 are 0.05× input (the page's footnote 2).
+    assert.equal(PRICE.sonnet.read, PRICE.sonnet.input * 0.05);
+    assert.equal(PRICE.opus.read, PRICE.opus.input * 0.05);
+  });
+
+  test("Sonnet 5 reads its cache at a tenth, not Sonnet 5.5's twentieth", () => {
+    assert.equal(priceOfModel("claude-sonnet-5-5")?.read, 0.1);
+    assert.equal(priceOfModel("claude-sonnet-5")?.read, 0.2);
+    assert.equal(priceOfModel("claude-sonnet-5-5@20260901"), PRICE.sonnet);
   });
 
   test("a dated id, a ladder id and the session model all price", () => {
-    assert.equal(priceOfModel("claude-haiku-4-5-20251001"), PRICE.haiku);
+    assert.equal(priceOfModel("claude-haiku-5-5"), PRICE.haiku);
+    assert.equal(priceOfModel("claude-haiku-5-5-20261007"), PRICE.haiku);
+    assert.equal(priceOfModel("claude-haiku-4-5-20251001")?.input, 1);
+    // A Haiku the page does not list is no guess at 5.5's tiered price.
+    assert.equal(priceOfModel("claude-haiku-5"), null);
+    assert.equal(priceOfModel("claude-haiku-5-6"), null);
     assert.equal(priceOfModel("claude-fable-5-1"), PRICE.fable);
     assert.equal(priceOfModel("claude-opus-5-5"), PRICE.opus);
     assert.equal(priceOfModel("claude-opus-5")?.read, 0.5);
@@ -56,11 +77,43 @@ describe("pricing", () => {
       cache_read_input_tokens: 100_000,
       cache_creation_input_tokens: 10_000,
     };
-    // haiku: 1000·1 + 10000·2 + 100000·0.1 + 2000·5 = 1000+20000+10000+10000 = 41000 µ$
+    // haiku 4.5: 1000·1 + 10000·2 + 100000·0.1 + 2000·5 = 1000+20000+10000+10000 = 41000 µ$
     assert.equal(usageCost("claude-haiku-4-5", usage, "1h"), 0.041);
     // 5m writes bill 1.25 instead of 2: 1000+12500+10000+10000
     assert.equal(usageCost("claude-haiku-4-5", usage, "5m"), 0.0335);
     assert.equal(usageCost("<synthetic>", usage), null);
+  });
+
+  test("Haiku 5.5 prices a request by its prompt: 111k pays the higher prices", () => {
+    const usage = {
+      input_tokens: 1_000,
+      output_tokens: 2_000,
+      cache_read_input_tokens: 100_000,
+      cache_creation_input_tokens: 10_000,
+    };
+    // prompt 111k > 100k: 1000·0.5 + 10000·1 + 100000·0.05 + 2000·2.5 = 500+10000+5000+5000 µ$
+    assert.ok(Math.abs((usageCost("claude-haiku-5-5", usage, "1h") ?? 0) - 0.0205) < 1e-12);
+    // 5m: 500 + 10000·0.625 + 5000 + 5000
+    assert.ok(Math.abs((usageCost("claude-haiku-5-5", usage, "5m") ?? 0) - 0.01675) < 1e-12);
+    // prompt 61k: 1000·0.1 + 10000·0.2 + 50000·0.01 + 2000·0.5 = 100+2000+500+1000 µ$
+    const small = { ...usage, cache_read_input_tokens: 50_000 };
+    assert.ok(Math.abs((usageCost("claude-haiku-5-5", small, "1h") ?? 0) - 0.0036) < 1e-12);
+  });
+
+  test("the threshold counts cache reads and writes, and is exclusive", () => {
+    const at = (n: number) => ({
+      input_tokens: 0,
+      output_tokens: 1_000_000,
+      cache_read_input_tokens: n,
+      cache_creation_input_tokens: 0,
+    });
+    // Output alone shows which price applies: $0.50 per million at or under, $2.50 over.
+    const out = (n: number) => (usageCost("claude-haiku-5-5", at(n), "1h") ?? 0) - n * (n > 100_000 ? 0.05 : 0.01) / 1e6;
+    assert.ok(Math.abs(out(100_000) - 0.5) < 1e-9);
+    assert.ok(Math.abs(out(100_001) - 2.5) < 1e-9);
+    assert.deepEqual(priceAt(PRICE.haiku, 100_000).output, 0.5);
+    assert.deepEqual(priceAt(PRICE.haiku, 100_001).output, 2.5);
+    assert.equal(priceAt(PRICE.fable, 900_000), PRICE.fable);
   });
 
   test("a downgrade is a step down the ladder", () => {
@@ -74,8 +127,8 @@ describe("pricing", () => {
     const v = switchVerdict("fable", "haiku", 200_000, 1_500);
     // stay: 200k·0.25 + 1.5k·50 = 0.05 + 0.075 = $0.125
     assert.equal(Math.round(v.stay * 1000) / 1000, 0.125);
-    // go: 200k·2 (haiku write) + 1.5k·5 + 200k·20 (fable re-write) = 0.4 + 0.0075 + 4 = $4.41
-    assert.equal(Math.round(v.go * 1000) / 1000, 4.408);
+    // go: 200k·1 (haiku write, the tier past 100k) + 1.5k·2.5 + 200k·20 (fable re-write) = 0.2 + 0.00375 + 4
+    assert.equal(Math.round(v.go * 1000) / 1000, 4.204);
     assert.equal(v.hold, true);
   });
 
@@ -101,10 +154,10 @@ describe("pricing", () => {
     assert.equal(breakEvenTokens("haiku", "fable", 1_500), 0);
   });
 
-  test("haiku's window is 200k and the rest take a million", () => {
-    assert.equal(fitsWindow("haiku", 150_000), true);
-    assert.equal(fitsWindow("haiku", 190_000), false, "headroom for the prompt and the reply");
-    assert.equal(fitsWindow("haiku", 300_000), false);
+  test("every tier takes a million, with headroom for the prompt and the reply", () => {
+    assert.equal(fitsWindow("haiku", 300_000), true);
+    assert.equal(fitsWindow("haiku", 900_000), true);
+    assert.equal(fitsWindow("haiku", 990_000), false);
     assert.equal(fitsWindow("sonnet", 300_000), true);
     assert.equal(fitsWindow("fable", 900_000), true);
     assert.equal(fitsWindow("fable", 990_000), false);
@@ -157,7 +210,8 @@ describe("usd: the places follow the rounded figure (2026-09-28)", () => {
 describe("pricing: Bedrock and Vertex ids (2026-09-29)", () => {
   test("priced by the model id inside", () => {
     assert.deepEqual(priceOfModel("us.anthropic.claude-opus-5-5-v1:0"), PRICE.opus);
-    assert.deepEqual(priceOfModel("anthropic.claude-haiku-4-5"), PRICE.haiku);
+    assert.equal(priceOfModel("anthropic.claude-haiku-4-5")?.input, 1);
+    assert.deepEqual(priceOfModel("anthropic.claude-haiku-5-5"), PRICE.haiku);
     assert.deepEqual(priceOfModel("claude-sonnet-5-5@20260901"), PRICE.sonnet);
   });
 });
@@ -168,6 +222,13 @@ describe("round-4 audit (2026-09-29)", () => {
     assert.equal(switchVerdict("fable", "haiku", be - 1, 2000, "1h", PRICE.fable, true).hold, false);
     assert.equal(switchVerdict("fable", "haiku", be + 1, 2000, "1h", PRICE.fable, true).hold, true);
     assert.ok(be > breakEvenTokens("fable", "haiku", 2000, "1h"));
+  });
+  test("the break-even is solved across the tier: a move that pays under 100k is held over it", () => {
+    // Cold, going costs a write of the context at haiku's price on top of what staying already writes.
+    const be = breakEvenTokens("fable", "haiku", 2000, "1h", PRICE.fable, true);
+    assert.equal(be, 100_000, "capped where haiku's price steps up");
+    assert.equal(switchVerdict("fable", "haiku", 100_000, 2000, "1h", PRICE.fable, true).hold, false);
+    assert.equal(switchVerdict("fable", "haiku", 100_001, 2000, "1h", PRICE.fable, true).hold, true);
   });
   test("Vertex's Opus 4 id is Opus 4.0's price", () => {
     assert.equal(priceOfModel("claude-opus-4@20250514")?.input, 15);

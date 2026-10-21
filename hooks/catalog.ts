@@ -15,7 +15,7 @@
  */
 
 import type { HttpInitLike, HttpResponseLike } from "./jev.ts";
-import type { Price } from "./pricing.ts";
+import { priceAt, type Price, type PriceTier } from "./pricing.ts";
 
 /** The format this module reads. A file that says a higher number is ignored. */
 export const CATALOG_SCHEMA = 1;
@@ -49,10 +49,9 @@ const DECIDER_ID = /^[\w.:@-]{1,60}(?:\/[\w.:@-]{1,60}){0,2}$/;
 const WORD = /^[a-z][a-z0-9_-]{0,31}$/;
 
 /** Dollars per million tokens, the same fields as pricing.ts. */
-export type CatalogPrice = Price;
+export type CatalogPrice = Omit<Price, "tiers">;
 
-/** From this many prompt tokens in one request, `price` replaces the model's base price. */
-export type PriceTier = { abovePromptTokens: number; price: CatalogPrice };
+export type { PriceTier };
 
 export type CatalogModel = {
   /** `haiku`, `sonnet`, `opus`, `fable`, `mythos`: the API's `line`. */
@@ -223,11 +222,17 @@ export function priceJumps(
 }
 
 /** The price a request pays on `model`: the tier its prompt reaches, else the base. Null with no base price. */
-export function priceForPrompt(model: CatalogModel, promptTokens: number): CatalogPrice | null {
+export function priceForPrompt(model: CatalogModel, promptTokens: number): Price | null {
   if (model.price === undefined) return null;
-  let price = model.price;
-  for (const tier of model.priceTiers ?? []) if (promptTokens > tier.abovePromptTokens) price = tier.price;
-  return price;
+  return priceAt(pricedModel(model), promptTokens);
+}
+
+/** The model's prices as pricing.ts holds them: the base with its tiers. Null with no base price. */
+export function pricedModel(model: CatalogModel): Price {
+  const price = model.price!;
+  return model.priceTiers !== undefined && model.priceTiers.length > 0
+    ? { ...price, tiers: model.priceTiers }
+    : { ...price };
 }
 
 /** The lines a plan leaves out, or none for a plan the catalog does not know. */

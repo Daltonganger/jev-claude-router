@@ -4,7 +4,7 @@
  * Prices are Anthropic's public list, per million tokens, read from
  * platform.claude.com/docs/en/about-claude/pricing on PRICE_DATE. A cache
  * read is a tenth of input on most models, a fortieth on Fable 5.1 and a
- * twentieth on Opus 5.5; a cache write is 1.25× input for the five-minute
+ * twentieth on Opus 5.5 and Sonnet 5.5; a cache write is 1.25× input for the five-minute
  * cache and 2× for the one-hour one. Claude Code writes the one-hour cache
  * (every one of 18,204 writes in a week of this machine's transcripts), so
  * that is the default here.
@@ -14,7 +14,7 @@
 
 import type { Tier } from "./policy.ts";
 
-export const PRICE_DATE = "2026-09-23";
+export const PRICE_DATE = "2026-10-21";
 
 /** Dollars per million tokens. */
 export type Price = {
@@ -23,14 +23,43 @@ export type Price = {
   write1h: number;
   read: number;
   output: number;
+  /**
+   * Haiku 5.5 is priced by the length of a request's prompt (all its input
+   * tokens, cache reads and writes included): past a threshold the whole
+   * request pays the tier's prices. Each request is priced on its own.
+   */
+  tiers?: readonly PriceTier[];
 };
+
+/** From more than `abovePromptTokens` in one request's prompt, `price` replaces the base. */
+export type PriceTier = { abovePromptTokens: number; price: Omit<Price, "tiers"> };
+
+/** The price a request with `promptTokens` of prompt pays: the highest tier it is over, else the base. */
+export function priceAt(price: Price, promptTokens: number): Price {
+  let at: Price = price;
+  for (const tier of price.tiers ?? [])
+    if (promptTokens > tier.abovePromptTokens) at = { ...tier.price };
+  return at;
+}
 
 export type Ttl = "5m" | "1h";
 
 /** The ladder's models. */
 export const PRICE: Record<Tier, Price> = {
-  haiku: { input: 1, write5m: 1.25, write1h: 2, read: 0.1, output: 5 },
-  sonnet: { input: 2, write5m: 2.5, write1h: 4, read: 0.2, output: 10 },
+  haiku: {
+    input: 0.1,
+    write5m: 0.125,
+    write1h: 0.2,
+    read: 0.01,
+    output: 0.5,
+    tiers: [
+      {
+        abovePromptTokens: 100_000,
+        price: { input: 0.5, write5m: 0.625, write1h: 1, read: 0.05, output: 2.5 },
+      },
+    ],
+  },
+  sonnet: { input: 2, write5m: 2.5, write1h: 4, read: 0.1, output: 10 },
   opus: { input: 4, write5m: 5, write1h: 8, read: 0.2, output: 20 },
   fable: { input: 10, write5m: 12.5, write1h: 20, read: 0.25, output: 50 },
 };
@@ -40,6 +69,9 @@ export const PRICE: Record<Tier, Price> = {
  * turn's cost is still right. Matched by prefix of the id the API reports.
  */
 const OPUS_4_0: Price = { input: 15, write5m: 18.75, write1h: 30, read: 1.5, output: 75 };
+const HAIKU_4_5: Price = { input: 1, write5m: 1.25, write1h: 2, read: 0.1, output: 5 };
+/** Sonnet 5 reads its cache at a tenth of input; Sonnet 5.5 at a twentieth. */
+const SONNET_5_0: Price = { input: 2, write5m: 2.5, write1h: 4, read: 0.2, output: 10 };
 /** Fable 5 and Mythos 5: Fable 5.1's price, but four times its cache read. */
 const FABLE_5_0: Price = { ...PRICE.fable, read: 1 };
 
@@ -52,9 +84,13 @@ const OTHER_PRICE: readonly (readonly [string, Price])[] = [
   ["claude-opus-4-1", OPUS_4_0],
   ["claude-opus-4-2025", OPUS_4_0],
   ["claude-opus-4", { input: 5, write5m: 6.25, write1h: 10, read: 0.5, output: 25 }],
-  ["claude-sonnet-5", PRICE.sonnet],
+  ["claude-sonnet-5-5", PRICE.sonnet],
+  ["claude-sonnet-5", SONNET_5_0],
   ["claude-sonnet-4", { input: 3, write5m: 3.75, write1h: 6, read: 0.3, output: 15 }],
-  ["claude-haiku-4", PRICE.haiku],
+  // Only the version the page prices: a Haiku 5.x it does not list is no
+  // guess at 5.5's tiered price.
+  ["claude-haiku-5-5", PRICE.haiku],
+  ["claude-haiku-4", HAIKU_4_5],
   ["claude-fable-5-1", PRICE.fable],
   ["claude-mythos-5-1", PRICE.fable],
   ["claude-fable-5", FABLE_5_0],
@@ -114,8 +150,13 @@ export function usageCost(
   usage: Tokens,
   ttl: Ttl = "1h",
 ): number | null {
-  const p = priceOfModel(model);
-  if (p === null) return null;
+  const base = priceOfModel(model);
+  if (base === null) return null;
+  // A request's prompt is everything it carried in, cached or not.
+  const p = priceAt(
+    base,
+    usage.input_tokens + usage.cache_creation_input_tokens + usage.cache_read_input_tokens,
+  );
   const write = ttl === "1h" ? p.write1h : p.write5m;
   return (
     (usage.input_tokens * p.input +
@@ -127,16 +168,17 @@ export function usageCost(
 }
 
 /**
- * The context window of each tier's model, in tokens: Haiku 4.5 takes 200K,
- * the rest 1M (platform.claude.com/docs/en/about-claude/models, 2026-09-23).
- * A request past it is refused with "Prompt is too long", and a week of
- * transcripts holds three of those, each right after a turn at 358k–605k
- * was routed to haiku. Nothing on the ladder is smaller than a session
- * with a `[1m]` model: the plain ids the router sends were answered at
- * 737k on fable and 344k on sonnet.
+ * The context window of each tier's model, in tokens: 1M on every model on
+ * the ladder (platform.claude.com/docs/en/about-claude/models/overview,
+ * 2026-10-21). Haiku 4.5 took 200K, and a week of transcripts held three
+ * "Prompt is too long" refusals, each right after a turn at 358k–605k was
+ * routed to it; Haiku 5.5 has the full window, though past 100K a request
+ * pays its higher prices (see `Price.tiers`). The plain ids the router sends
+ * were answered at 737k on fable and 344k on sonnet, so a session with a
+ * `[1m]` model is not larger than these.
  */
 export const WINDOW_TOKENS: Record<Tier, number> = {
-  haiku: 200_000,
+  haiku: 1_000_000,
   sonnet: 1_000_000,
   opus: 1_000_000,
   fable: 1_000_000,
@@ -231,10 +273,11 @@ export function switchVerdict(
   const write = (p: Price) => (ttl === "1h" ? p.write1h : p.write5m);
   const ctx = contextTokens / 1e6;
   const out = outputTokens / 1e6;
-  const stay =
-    ctx * (fromCold ? write(fromPrice) : fromPrice.read) + out * fromPrice.output;
-  const go =
-    ctx * write(PRICE[to]) + out * PRICE[to].output + ctx * write(fromPrice);
+  // The next request's prompt is the whole context, whichever tier it goes to.
+  const from_ = priceAt(fromPrice, contextTokens);
+  const to_ = priceAt(PRICE[to], contextTokens);
+  const stay = ctx * (fromCold ? write(from_) : from_.read) + out * from_.output;
+  const go = ctx * write(to_) + out * to_.output + ctx * write(from_);
   return { stay, go, hold: go >= stay };
 }
 
@@ -259,9 +302,10 @@ export function upgradeVerdict(
   const write = (p: Price) => (ttl === "1h" ? p.write1h : p.write5m);
   const ctx = contextTokens / 1e6;
   const out = outputTokens / 1e6;
-  const stay =
-    ctx * (fromCold ? write(fromPrice) : fromPrice.read) + out * fromPrice.output;
-  const go = ctx * write(PRICE[to]) + out * PRICE[to].output;
+  const from_ = priceAt(fromPrice, contextTokens);
+  const to_ = priceAt(PRICE[to], contextTokens);
+  const stay = ctx * (fromCold ? write(from_) : from_.read) + out * from_.output;
+  const go = ctx * write(to_) + out * to_.output;
   return { stay, go, hold: go - stay > limit, limit };
 }
 
@@ -284,10 +328,25 @@ export function breakEvenTokens(
   // stay = ctx·read(from) + out·output(from); go = ctx·(write(to)+write(from)) + out·output(to)
   // go < stay  ⇔  ctx·(write(to)+write(from)−read(from)) < out·(output(from)−output(to))
   // Cold, staying writes too: read(from) becomes write(from).
-  const perCtx = write(PRICE[to]) + write(fromPrice) - (fromCold ? write(fromPrice) : fromPrice.read);
-  const perOut = fromPrice.output - PRICE[to].output;
-  if (perOut <= 0 || perCtx <= 0) return 0;
-  return Math.floor((outputTokens * perOut) / perCtx);
+  // A tiered price changes with the context, so the line is solved region by
+  // region between the tiers' thresholds, and the largest context that pays wins.
+  const edges = [
+    ...new Set([0, ...(fromPrice.tiers ?? []).map((t) => t.abovePromptTokens), ...(PRICE[to].tiers ?? []).map((t) => t.abovePromptTokens)]),
+  ].sort((x, y) => x - y);
+  let best = 0;
+  edges.forEach((lo, i) => {
+    const hi = edges[i + 1] ?? Infinity;
+    // Prices that apply from just past `lo` (a tier starts above its threshold).
+    const f = priceAt(fromPrice, lo + 1);
+    const t = priceAt(PRICE[to], lo + 1);
+    const perCtx = write(t) + write(f) - (fromCold ? write(f) : f.read);
+    const perOut = f.output - t.output;
+    if (perOut <= 0 || perCtx <= 0) return;
+    const x = Math.floor((outputTokens * perOut) / perCtx);
+    // Pays up to x; the region caps it at hi, and it counts only if some context in it pays.
+    if (x > lo) best = Math.max(best, Math.min(x, hi));
+  });
+  return best;
 }
 
 /** `$4.41`, `$0.36`, `$0.024`, `$0.0035`: enough places to show a small turn. */

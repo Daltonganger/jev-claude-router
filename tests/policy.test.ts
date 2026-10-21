@@ -301,7 +301,7 @@ describe("a tier named in the prompt", () => {
 
   test("a model id names its tier too", () => {
     assert.equal(parseOverride("use claude-opus-5-5"), "opus");
-    assert.equal(parseOverride("switch to claude-haiku-4-5"), "haiku");
+    assert.equal(parseOverride("switch to claude-haiku-5-5"), "haiku");
   });
 
   test("case does not matter", () => {

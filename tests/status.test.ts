@@ -34,7 +34,15 @@ import {
   withoutImitations,
   ImitationFilter,
 } from "../hooks/status.ts";
-import { breakEvenTokens } from "../hooks/pricing.ts";
+import { breakEvenTokens, WINDOW_TOKENS } from "../hooks/pricing.ts";
+// These suites exercise the window guard (a turn too long for a tier is moved
+// up, or held where it is), which needs a tier with a smaller window than the
+// others. Haiku 4.5 was that tier; Haiku 5.5 takes 1M like the rest, so the
+// guard is driven by giving haiku its old 200k here. tests/pricing.test.ts
+// covers the real windows. Each test file is its own process, so this reaches
+// no other suite.
+WINDOW_TOKENS.haiku = 200_000;
+
 import {
   ceilingAt,
   DEFAULT_STICKY_CONFIDENCE,
@@ -294,7 +302,7 @@ describe("attemptOf", () => {
         tier: "sonnet",
         effort: "low",
         held: "haiku",
-        heldModel: "claude-haiku-4-5",
+        heldModel: "claude-haiku-5-5",
         heldEffort: "xhigh",
         effortConfidence: 0.2,
         confidence: 0.61,
@@ -460,12 +468,12 @@ describe("the reply summary", () => {
       ms: 200,
       kind: "agent",
       agent: { type: "Explore", label: "review it" },
-      decision: { ...decision, tier: "haiku", model: "claude-haiku-4-5", effort: "low" },
+      decision: { ...decision, tier: "haiku", model: "claude-haiku-5-5", effort: "low" },
     };
-    addUsage(agent, usageOf("claude-haiku-4-5", { cache_read_input_tokens: 20_000, cache_creation_input_tokens: 0 }));
+    addUsage(agent, usageOf("claude-haiku-5-5", { cache_read_input_tokens: 20_000, cache_creation_input_tokens: 0 }));
     const s = replySummary([main, agent])!;
-    assert.match(s, /agents: Explore haiku-4-5 \$0\.013/);
-    assert.match(s, /\$0\.37 · /);
+    assert.match(s, /agents: Explore haiku-5-5 \$0\.0013/);
+    assert.match(s, /\$0\.36 · /);
     assert.match(s, /fable-5-1 ✓/, "one main turn still reads as one");
   });
 
@@ -477,7 +485,7 @@ describe("the reply summary", () => {
         tier: "fable",
         effort: "low",
         held: "haiku",
-        heldModel: "claude-haiku-4-5",
+        heldModel: "claude-haiku-5-5",
         heldCost: { stay: 0.125, go: 4.41 },
       };
     }
@@ -613,7 +621,7 @@ describe("a held turn", () => {
       effort: "low",
       confidence: 0.61,
       held: "haiku",
-      heldModel: "claude-haiku-4-5",
+      heldModel: "claude-haiku-5-5",
     },
   };
 
@@ -929,10 +937,10 @@ describe("a downgrade held on its price", () => {
     assert.equal(a.decision.tier, "fable");
     assert.equal(a.decision.held, "haiku");
     assert.equal(a.decision.effort, "low", "Jev's effort still applies");
-    // stay: 150k·0.25 + 1.5k·50 = 0.0375 + 0.075; go: 150k·2 + 1.5k·5 + 150k·20 = 0.3 + 0.0075 + 3.0
+    // stay: 150k·0.25 + 1.5k·50 = 0.0375 + 0.075; go: 150k·1 (haiku's price past 100k) + 1.5k·2.5 + 150k·20 = 0.15 + 0.00375 + 3.0
     assert.equal(
       liveLine(a),
-      "> ✳️ fable · low · kept fable: haiku costs $3.31 vs $0.11 · 300ms",
+      "> ✳️ fable · low · kept fable: haiku costs $3.15 vs $0.11 · 300ms",
     );
   });
 
@@ -954,7 +962,7 @@ describe("a downgrade held on its price", () => {
   });
 
   test("an upgrade is never priced: a sure one goes through at any context", () => {
-    const onHaiku = { ...onFable, tier: "haiku" as const, model: "claude-haiku-4-5" };
+    const onHaiku = { ...onFable, tier: "haiku" as const, model: "claude-haiku-5-5" };
     const a = attemptOf("plan the architecture", jev("fable"), TIERS, {
       sticky: 0.75,
       running: onHaiku,
@@ -1178,8 +1186,8 @@ describe("addUsage prices each step at the model that answered it", () => {
     const a: Attempt = { prompt: "p", ms: 0, decision: { tier: "opus", model: "claude-opus-5-5", effort: "medium", confidence: 1 } };
     const step = (model: string) => ({ model, input_tokens: 0, output_tokens: 1_000_000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 });
     addUsage(a, step("claude-fable-5-1"));
-    addUsage(a, step("claude-haiku-4-5"));
-    assert.equal(a.cost, 50 + 5, "fable's output price for one step, haiku's for the other");
+    addUsage(a, step("claude-haiku-5-5"));
+    assert.equal(a.cost, 50 + 0.5, "fable's output price for one step, haiku's for the other");
   });
 });
 

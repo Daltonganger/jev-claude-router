@@ -10,6 +10,22 @@
 
 ## Unreleased
 
+### Features
+
+- **Haiku 5.5 is the haiku tier** (`claude-haiku-5-5`, a 1M window). Its price
+  depends on the request: a prompt over 100k tokens, cache reads and writes
+  included, pays the higher prices. The cost line and the downgrade and upgrade
+  checks count that.
+- **`catalog.json` and a loader for it** (`hooks/catalog.ts`): prices, windows
+  and what each plan covers in one file on GitHub, fetched at session start with
+  a saved copy and the built-in tables as the fallback. Not yet read by the
+  router.
+
+### Fixes
+
+- **Sonnet 5.5's cache reads are $0.10, not $0.20** per million tokens, as the
+  pricing page lists them (Sonnet 5's stay at $0.20).
+
 ## 1.1.0 — 2026-09-29
 
 ### Features

@@ -113,7 +113,7 @@ export const EFFORTS: readonly Effort[] = [
 
 /** Model ids as the engine names them. */
 export const MODEL_OF: Record<Tier, string> = {
-  haiku: "claude-haiku-4-5",
+  haiku: "claude-haiku-5-5",
   sonnet: "claude-sonnet-5-5",
   opus: "claude-opus-5-5",
   fable: "claude-fable-5-1",
@@ -881,7 +881,8 @@ export function forcedDecision(tier: Tier, fresh: Decision | null): Decision {
  * Whether a turn staying on Sonnet should keep the previous turn's effort.
  *
  * Measured 2026-09-22 on one session at ~58k context: an effort change on
- * Opus 5.5 and Haiku 4.5 costs nothing (the engine sends it per turn), but
+ * Opus 5.5 and Haiku 4.5 costs nothing (the engine sends it per turn; not
+ * yet measured on Haiku 5.5, which is assumed to behave the same), but
  * on Sonnet 5 it rewrites everything after the system block, about half the
  * prefix, $0.12 at that size. So on Sonnet an effort flip is a cache miss
  * and gets the same treatment as a model switch: it has to clear the bar.

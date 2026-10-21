@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { describe, test } from "node:test";
 
 // @ts-expect-error plain JavaScript modules
-import { agreement, barTable, baselines, combine, compare, confusion, costIndex, OUTPUT_PRICE, suggestBar, labelCounts, percentile, report, summarize, table } from "../scripts/bench/metrics.mjs";
+import { agreement, barTable, baselines, betterThanRest, normalSf, combine, compare, confusion, costIndex, OUTPUT_PRICE, suggestBar, labelCounts, percentile, report, summarize, table } from "../scripts/bench/metrics.mjs";
 // @ts-expect-error plain JavaScript modules
 import { seeded, typedPrompt } from "../scripts/bench/extract.mjs";
 // @ts-expect-error plain JavaScript modules
@@ -332,29 +332,50 @@ describe("where a bar would help", () => {
   test("for each bar, how many answers reach it and how often those are right", () => {
     const t = barTable(informative);
     const at = (bar: number) => t.find((b: { bar: number }) => b.bar === bar);
-    assert.deepEqual(at(0.5), { bar: 0.5, n: 40, share: 1, accuracy: 28 / 40 });
-    assert.deepEqual(at(0.9), { bar: 0.9, n: 20, share: 0.5, accuracy: 0.9 });
+    assert.deepEqual({ ...at(0.5), p: null }, { bar: 0.5, n: 40, share: 1, accuracy: 28 / 40, p: null });
+    assert.equal(at(0.5).p, null, "everything reaches it: nothing below to compare with");
+    assert.equal(at(0.9).n, 20);
+    assert.equal(at(0.9).share, 0.5);
+    assert.equal(at(0.9).accuracy, 0.9);
+    assert.ok(at(0.9).p < 0.01);
     assert.equal(at(0.95).n, 0);
     assert.equal(at(0.95).accuracy, null);
   });
 
+  test("the normal tail, and the test that the confident are right more often", () => {
+    assert.ok(Math.abs(normalSf(0) - 0.5) < 1e-6);
+    assert.ok(Math.abs(normalSf(1.645) - 0.05) < 1e-3);
+    assert.ok(Math.abs(normalSf(-1.645) - 0.95) < 1e-3);
+    assert.equal(betterThanRest(9, 10, 5, 10), null, "under 15 on a side: too few to say");
+    // 18/20 against 10/20: a clear gap.
+    assert.ok((betterThanRest(18, 20, 10, 20) as number) < 0.01);
+    // 10/15 (67%) against 66/138 (48%), the size of Jev's best bar: could be luck.
+    assert.ok((betterThanRest(10, 15, 66, 138) as number) > 0.05);
+  });
+
   test("the lowest bar that lifts the confident answers clearly above the rest", () => {
     const pick = suggestBar(informative);
-    assert.equal(pick.bar, 0.6, "from 0.6 only the 0.9 answers remain: 90% against 70% overall");
+    assert.equal(pick.bar, 0.6, "from 0.6 only the 0.9 answers remain: 90% against 50% below");
     assert.equal(pick.accuracy, 0.9);
     assert.equal(pick.overall, 0.7);
+    assert.ok(pick.p < 0.01);
   });
 
   test("a model whose confidence says nothing gets no bar, and the report says so", () => {
     assert.equal(suggestBar(flat), null);
-    assert.match(barsReport({ flat }), /No bar helps/);
-    assert.match(barsReport({ informative }), /Suggested bar 60%: 50% of answers reach it, 90% of those are right, against 70% overall/);
+    assert.match(barsReport({ flat }), /No bar helps: no bar separates/);
+    assert.match(barsReport({ informative }), /Suggested bar 60%: 50% of answers reach it, 90% of those are right, against 70% overall \(p = /);
   });
 
-  test("a bar over fewer answers than it takes to tell is not suggested", () => {
+  test("a bar over too few answers, or a gap that luck explains, is not suggested", () => {
     const few = [...Array(10)].map(() => r(true, 0.95)).concat([...Array(30)].map((_, i) => r(i < 12, 0.5)));
-    assert.equal(suggestBar(few, { minAnswers: 15 }), null);
-    assert.ok(suggestBar(few, { minAnswers: 5 }));
+    assert.equal(suggestBar(few), null, "10 answers reach 0.95");
+    // 15 confident answers, 10 right (67%), against 66 of 138 (48%): the best bar Jev had, and luck.
+    const jevLike = [
+      ...[...Array(15)].map((_, i) => r(i < 10, 0.9)),
+      ...[...Array(138)].map((_, i) => r(i < 66, 0.6)),
+    ];
+    assert.equal(suggestBar(jevLike), null);
   });
 
   test("results files are pooled per model name", () => {

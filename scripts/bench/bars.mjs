@@ -30,13 +30,13 @@ export function barsReport(rows) {
   for (const [model, r] of Object.entries(rows)) {
     const s = summarize(r);
     out.push(`${model}: ${s.answered} answers, ${pct(s.accuracy)} right overall`);
-    out.push("  bar    answers reaching it    right among them");
-    for (const b of barTable(r)) out.push(`  ${pct(b.bar).padEnd(6)} ${`${b.n} (${pct(b.share)})`.padEnd(22)} ${pct(b.accuracy)}`);
+    out.push("  bar    answers reaching it    right among them    better than the rest (p)");
+    for (const b of barTable(r)) out.push(`  ${pct(b.bar).padEnd(6)} ${`${b.n} (${pct(b.share)})`.padEnd(22)} ${pct(b.accuracy).padEnd(19)} ${b.p === null ? "–" : b.p < 0.001 ? "<0.001" : b.p.toFixed(3)}`);
     const pick = suggestBar(r);
     out.push(
       pick === null
-        ? `  No bar helps: its confident answers are not clearly better than the rest. A bar on this model filters little, so a low one (or none) is as good as a high one.`
-        : `  Suggested bar ${pct(pick.bar)}: ${pct(pick.share)} of answers reach it, ${pct(pick.accuracy)} of those are right, against ${pct(pick.overall)} overall.`,
+        ? `  No bar helps: no bar separates its right answers from its wrong ones (p < 0.01). A bar on this model changes how often the router switches, not how right it is.`
+        : `  Suggested bar ${pct(pick.bar)}: ${pct(pick.share)} of answers reach it, ${pct(pick.accuracy)} of those are right, against ${pct(pick.overall)} overall (p = ${pick.p < 0.001 ? "<0.001" : pick.p.toFixed(3)}). Ten bars were looked at: confirm on prompts that were not used to choose it.`,
     );
     out.push("");
   }

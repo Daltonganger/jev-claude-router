@@ -116,31 +116,64 @@ export function agreement(byModel) {
 /** Bars worth looking at, from a coin-flip to nearly sure. */
 export const BAR_STEPS = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95];
 
-/** For each bar: how many answers reach it, their share of all, and how often those are right. */
+/** P(Z > z) for a standard normal Z (Abramowitz and Stegun 7.1.26 for the error function). */
+export function normalSf(z) {
+  const x = Math.abs(z) / Math.SQRT2;
+  const t = 1 / (1 + 0.3275911 * x);
+  const erf = 1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
+  const upper = (1 - erf) / 2;
+  return z >= 0 ? upper : 1 - upper;
+}
+
+/**
+ * One-sided p-value that the answers at or above a bar are right more often than those below it
+ * (a two-proportion z-test). Null when either side has fewer than `min` answers: too few to say.
+ */
+export function betterThanRest(rightAbove, above, rightBelow, below, min = 15) {
+  if (above < min || below < min) return null;
+  const pooled = (rightAbove + rightBelow) / (above + below);
+  const se = Math.sqrt(pooled * (1 - pooled) * (1 / above + 1 / below));
+  if (se === 0) return 1;
+  return normalSf((rightAbove / above - rightBelow / below) / se);
+}
+
+/**
+ * For each bar: how many answers reach it, their share of all, how often those are right, and
+ * the p-value that they are right more often than the answers below the bar.
+ */
 export function barTable(rows) {
   const answered = rows.filter((r) => TIERS.includes(r.label) && TIERS.includes(r.pick));
+  const right = answered.filter((r) => r.pick === r.label).length;
   return BAR_STEPS.map((bar) => {
     const above = answered.filter((r) => (r.confidence ?? 0) >= bar);
+    const rightAbove = above.filter((r) => r.pick === r.label).length;
     return {
       bar,
       n: above.length,
       share: answered.length === 0 ? null : above.length / answered.length,
-      accuracy: above.length === 0 ? null : above.filter((r) => r.pick === r.label).length / above.length,
+      accuracy: above.length === 0 ? null : rightAbove / above.length,
+      p: betterThanRest(rightAbove, above.length, right - rightAbove, answered.length - above.length),
     };
   });
 }
 
 /**
- * The lowest bar at which a model's confident answers are clearly better than its answers
- * overall: at least `lift` more often right, over at least `minAnswers` answers. Null when no
- * bar does, which says the model's confidence tells its right answers from its wrong ones
- * no better than chance does on this data, and a bar on it filters nothing.
+ * The lowest bar at which a model's confident answers are clearly better than the rest: right
+ * at least `lift` more often than the answers below the bar, and so much more that luck is an
+ * unlikely reason (`alpha`; ten bars are looked at, so it is strict). Null when no bar does,
+ * which says its confidence does not tell its right answers from its wrong ones on this data,
+ * and a bar on it changes how often the router switches, not how right it is.
  */
-export function suggestBar(rows, { minAnswers = 15, lift = 0.1 } = {}) {
+export function suggestBar(rows, { alpha = 0.01, lift = 0.1 } = {}) {
   const answered = rows.filter((r) => TIERS.includes(r.label) && TIERS.includes(r.pick));
   if (answered.length === 0) return null;
-  const overall = answered.filter((r) => r.pick === r.label).length / answered.length;
-  const hit = barTable(rows).find((b) => b.n >= minAnswers && b.accuracy !== null && b.accuracy >= overall + lift);
+  const right = answered.filter((r) => r.pick === r.label).length;
+  const overall = right / answered.length;
+  const hit = barTable(rows).find((b) => {
+    if (b.p === null || b.p >= alpha) return false;
+    const below = (right - b.accuracy * b.n) / (answered.length - b.n);
+    return b.accuracy - below >= lift;
+  });
   return hit === undefined ? null : { ...hit, overall };
 }
 

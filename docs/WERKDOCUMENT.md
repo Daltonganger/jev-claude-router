@@ -406,15 +406,19 @@ goedkopere kandidaat. Volgende stap: een tweede, andere set prompts, en Laya.
 - Snelheid vanaf de Mac naar `jev.2631.eu`: gemiddeld 1,35 s (`multilingual`) tot 2,1 s, p95 1,9 s tot 3,3 s.
   Dat is boven de standaard-wachttijd van 1,5 s: de meeste beurten zouden ongerouteerd blijven, en met een
   langere wachttijd (`JEV_ROUTER_TIMEOUT_MS`, hoogstens 8000) duurt elke beurt 2 tot 3 s langer.
-Voorlopige conclusie: in deze opstelling is Laya geen alternatief voor Jev 1.14 voor wat de keuzes betreft.
-**De snelheid hierboven is niet betrouwbaar:** de run vroeg vier prompts tegelijk aan de NAS, en een enkele
-kleine vraag (twee opties, korte tekst) kostte vanaf de Mac 0,23 s totaal. Wat de gemeten 1,4 s tot 2,1 s
-bevat is dus deels wachtrij. De bench vraagt een Laya-server voortaan één prompt tegelijk
-(`--laya-concurrency`). Opnieuw meten met de echte vraag (vier tiers en de effortvraag) staat open.
-**`x_jev_confidence` stond op geen van de 79 antwoorden** (op het antwoordobject van de tier). Of de server
-dat veld niet stuurt (dan is de Laya-versie ouder dan de wijziging die het toevoegt) of het elders zet,
-is niet bekend zonder het ruwe antwoord. De router valt dan terug op de kansen, die dezelfde formule geven,
-dus het werkt, maar het is niet wat de server zou kunnen leveren.
+**Laya opnieuw gemeten, één prompt tegelijk (2026-10-21).** De keuzes zijn identiek aan de eerste run
+(zelfde percentages en matrices); de snelheid en het veld `x_jev_confidence` zijn anders:
+- Snelheid: `multilingual` gemiddeld 366 ms, p95 575 ms; `jev-router` en `jev-latest` gemiddeld 550 ms, p95
+  1,13 s. Jev 1.14 via OpenRouter: 369 ms en 1215 ms. De eerste run vroeg vier prompts tegelijk aan de NAS en
+  mat dus deels de wachtrij; Laya past binnen de standaard-wachttijd van 1,5 s.
+- `x_jev_confidence` stond nu op alle 79 tier-antwoorden en alle 79 effort-antwoorden, dus op het
+  antwoordobject zelf, zoals de router het leest. De eerste run toonde 0 van 79. Wat er tussen de twee runs is
+  veranderd (een bijgewerkte of herstarte server is de aannemelijkste verklaring) is niet vastgesteld.
+- `multilingual` is aantoonbaar beter dan `jev-router`/`jev-latest` op deze prompts (alleen goed: 13 tegen
+  1, p < 0,01), maar zegt nog steeds 64 van de 79 keer sonnet en herkent haiku nauwelijks.
+Conclusie voor de keuzes: Laya `multilingual` is snel genoeg en gratis, maar werkt hier als een router die bijna
+altijd sonnet kiest. Als terugval of voor privacy bruikbaar; als enige beslismodel mist het de besparing die
+Jev en Microsoft wel vinden (haiku herkennen).
 
 ## 6. Compaction
 

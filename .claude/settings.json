@@ -1,0 +1,15 @@
+{
+  "env": {
+    "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1",
+    "JEV_ROUTER_PROVIDER": "openrouter",
+    "JEV_ROUTER_PLAN": "pro"
+  },
+  "extraKnownMarketplaces": {
+    "jev-claude-router": {
+      "source": { "source": "github", "repo": "Daltonganger/jev-claude-router" }
+    }
+  },
+  "enabledPlugins": {
+    "jev-claude-router@jev-claude-router": true
+  }
+}

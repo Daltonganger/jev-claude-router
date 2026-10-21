@@ -16,6 +16,8 @@ import { agreement, baselines, combine, compare, confusion, labelCounts, percent
 // @ts-expect-error plain JavaScript modules
 import { seeded, typedPrompt } from "../scripts/bench/extract.mjs";
 // @ts-expect-error plain JavaScript modules
+import { merge } from "../scripts/bench/report.mjs";
+// @ts-expect-error plain JavaScript modules
 import { ask, catalog, layaCatalog, routerAsks, run, specOf } from "../scripts/bench/run.mjs";
 
 const row = (label: string, pick: string | null, confidence = 0.9, ms = 100, cost = 0.00001) => ({ label, pick, confidence, ms, cost });
@@ -154,6 +156,33 @@ describe("the label set, baselines and a fair comparison", () => {
   test("a prompt the router never sends to the model is left out", () => {
     for (const p of ["ok", "Yes!", "go ahead.", "use opus for this", "switch to haiku"]) assert.equal(routerAsks(p), false, p);
     for (const p of ["rename foo to bar", "Ja, maak dat", "ok but first explain the change"]) assert.equal(routerAsks(p), true, p);
+  });
+});
+
+describe("report on several results files", () => {
+  const rowsFor = (ids: number[]) => ids.map((id) => ({ id, label: "opus", pick: "opus", confidence: 0.9, ms: 1 }));
+
+  test("puts the models of each file side by side", () => {
+    const merged = merge([
+      { name: "a.json", data: { rows: { m1: rowsFor([1, 2, 3]), m2: rowsFor([1, 2, 3]) } } },
+      { name: "b.json", data: { rows: { "laya:x": rowsFor([1, 2, 3]) } } },
+    ]);
+    assert.deepEqual(Object.keys(merged), ["m1", "m2", "laya:x"]);
+  });
+
+  test("a model with the same name in two files keeps both", () => {
+    const merged = merge([
+      { name: "a.json", data: { rows: { m: rowsFor([1, 2]) } } },
+      { name: "b.json", data: { rows: { m: rowsFor([1, 2]) } } },
+    ]);
+    assert.deepEqual(Object.keys(merged), ["m", "m'"]);
+  });
+
+  test("files run on other prompts are refused, naming the file", () => {
+    assert.throws(
+      () => merge([{ name: "a.json", data: { rows: { m: rowsFor([1, 2, 3]) } } }, { name: "b.json", data: { rows: { n: rowsFor([1, 2, 4]) } } }]),
+      /b\.json: n was run on different prompts/,
+    );
   });
 });
 

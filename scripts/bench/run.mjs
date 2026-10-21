@@ -148,6 +148,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const result = await run({ cases, models, base, api: arg("api", "decisions"), key, concurrency: Number(arg("concurrency", "4")), confidence: mode });
   console.log(`${cases.length} labelled prompts, ${models.length} models, confidence read from ${mode === "router" ? "what the router reads" : "the probabilities"}\n`);
   console.log(table(result.summaries));
+  for (const [model, rows] of Object.entries(result.rows)) {
+    const counts = {};
+    for (const r of rows) if (r.error) counts[r.error] = (counts[r.error] ?? 0) + 1;
+    if (Object.keys(counts).length > 0)
+      console.log(`\n${model} failed: ${Object.entries(counts).map(([e, n]) => `${e} ×${n}`).join(", ")}`);
+  }
   console.log("\nAgreement on the tier:");
   for (const [pair, share] of Object.entries(result.agreement)) console.log(`  ${pair.replace("|", "  vs  ")}  ${share === null ? "–" : `${Math.round(share * 100)}%`}`);
   const out = arg("out", "bench-results.json");

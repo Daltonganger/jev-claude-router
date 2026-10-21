@@ -253,6 +253,23 @@ describe("run, against a stand-in for the Decisions API", () => {
     assert.equal(n.error, "no usable tier");
   });
 
+  test("the command line says why a model failed", async () => {
+    const s = await standIn();
+    const dir = mkdtempSync(join(tmpdir(), "bench-"));
+    try {
+      const casesFile = join(dir, "cases.jsonl");
+      writeFileSync(casesFile, cases.slice(0, 2).map((c) => JSON.stringify(c)).join("\n") + "\n");
+      const script = new URL("../scripts/bench/run.mjs", import.meta.url).pathname;
+      const { execFile } = await import("node:child_process");
+      const stdout = await new Promise<string>((resolve, reject) =>
+        execFile(process.execPath, ["--experimental-strip-types", script, "--cases", casesFile, "--models", "bad/model", "--base", s.base, "--out", join(dir, "o.json")], { env: { ...process.env, OPENROUTER_API_KEY: "k" } }, (err, so) => (err ? reject(err) : resolve(so))),
+      );
+      assert.match(stdout, /bad\/model failed: HTTP 500 ×2/);
+    } finally {
+      s.close();
+    }
+  });
+
   test("the catalog lists the decision models", async () => {
     const s = await standIn();
     try {
@@ -278,6 +295,7 @@ describe("run, against a stand-in for the Decisions API", () => {
       });
       assert.match(stdout, /5 labelled prompts, 1 models/);
       assert.match(stdout, /\| typesafe\/jev-1\.14 \| 5\/5 \| 80% /);
+      assert.doesNotMatch(stdout, /failed:/);
       assert.equal(JSON.parse(readFileSync(out, "utf8")).summaries["typesafe/jev-1.14"].answered, 5);
     } finally {
       s.close();

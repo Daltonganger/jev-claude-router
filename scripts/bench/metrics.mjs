@@ -113,8 +113,11 @@ export function agreement(byModel) {
   return out;
 }
 
-/** Bars worth looking at, from a coin-flip to nearly sure. */
-export const BAR_STEPS = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95];
+/**
+ * Bars worth looking at. They start low because a model that spreads its probability (three
+ * tiers, 0.6 on the pick, is a confidence of 0.4) never reaches the bars that suit Jev.
+ */
+export const BAR_STEPS = [0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95];
 
 /** P(Z > z) for a standard normal Z (Abramowitz and Stegun 7.1.26 for the error function). */
 export function normalSf(z) {
@@ -160,17 +163,20 @@ export function barTable(rows) {
 /**
  * The lowest bar at which a model's confident answers are clearly better than the rest: right
  * at least `lift` more often than the answers below the bar, and so much more that luck is an
- * unlikely reason (`alpha`; ten bars are looked at, so it is strict). Null when no bar does,
+ * unlikely reason (`alpha`, by default 5% shared over the bars that can be tested, as many
+ * bars are looked at). Null when no bar does,
  * which says its confidence does not tell its right answers from its wrong ones on this data,
  * and a bar on it changes how often the router switches, not how right it is.
  */
-export function suggestBar(rows, { alpha = 0.01, lift = 0.1 } = {}) {
+export function suggestBar(rows, { alpha, lift = 0.1 } = {}) {
   const answered = rows.filter((r) => TIERS.includes(r.label) && TIERS.includes(r.pick));
   if (answered.length === 0) return null;
   const right = answered.filter((r) => r.pick === r.label).length;
   const overall = right / answered.length;
-  const hit = barTable(rows).find((b) => {
-    if (b.p === null || b.p >= alpha) return false;
+  const table = barTable(rows);
+  const limit = alpha ?? 0.05 / Math.max(1, table.filter((b) => b.p !== null).length);
+  const hit = table.find((b) => {
+    if (b.p === null || b.p >= limit) return false;
     const below = (right - b.accuracy * b.n) / (answered.length - b.n);
     return b.accuracy - below >= lift;
   });

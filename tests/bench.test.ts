@@ -338,6 +338,7 @@ describe("where a bar would help", () => {
     assert.equal(at(0.9).share, 0.5);
     assert.equal(at(0.9).accuracy, 0.9);
     assert.ok(at(0.9).p < 0.01);
+    assert.equal(at(0.2).n, 40, "the table starts low, for a model that is never very sure");
     assert.equal(at(0.95).n, 0);
     assert.equal(at(0.95).accuracy, null);
   });
@@ -356,6 +357,7 @@ describe("where a bar would help", () => {
   test("the lowest bar that lifts the confident answers clearly above the rest", () => {
     const pick = suggestBar(informative);
     assert.equal(pick.bar, 0.6, "from 0.6 only the 0.9 answers remain: 90% against 50% below");
+    assert.ok(pick.p < 0.05 / 12, "the limit shares 5% over the bars that can be tested");
     assert.equal(pick.accuracy, 0.9);
     assert.equal(pick.overall, 0.7);
     assert.ok(pick.p < 0.01);

@@ -35,8 +35,8 @@ export function barsReport(rows) {
     const pick = suggestBar(r);
     out.push(
       pick === null
-        ? `  No bar helps: no bar separates its right answers from its wrong ones (p < 0.01). A bar on this model changes how often the router switches, not how right it is.`
-        : `  Suggested bar ${pct(pick.bar)}: ${pct(pick.share)} of answers reach it, ${pct(pick.accuracy)} of those are right, against ${pct(pick.overall)} overall (p = ${pick.p < 0.001 ? "<0.001" : pick.p.toFixed(3)}). Ten bars were looked at: confirm on prompts that were not used to choose it.`,
+        ? `  No bar helps: no bar separates its right answers from its wrong ones (beyond what luck explains, with all the bars looked at). A bar on this model changes how often the router switches, not how right it is.`
+        : `  Suggested bar ${pct(pick.bar)}: ${pct(pick.share)} of answers reach it, ${pct(pick.accuracy)} of those are right, against ${pct(pick.overall)} overall (p = ${pick.p < 0.001 ? "<0.001" : pick.p.toFixed(3)}). Many bars were looked at: confirm on prompts that were not used to choose it.`,
     );
     out.push("");
   }

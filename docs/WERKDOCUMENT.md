@@ -458,12 +458,12 @@ noemt, dan een balk die je voor alle beslismodellen zelf zet (houdt de catalogus
 standaard; `/jev sticky` is het woord van de gebruiker voor alle modellen. `/jev` toont de balken per model.
 `npm run bench:bars -- a.json b.json` toont per model hoeveel antwoorden elke balk halen en hoe vaak die goed zijn,
 en stelt de laagste balk voor waarbij de zekere antwoorden duidelijk beter zijn dan de rest (minstens 15
-antwoorden, minstens 10 punten); levert geen balk dat op, dan zegt het dat een balk op dat model niets filtert.
+antwoorden aan elke kant, minstens 10 punten, toeval onder 5% gedeeld over de balken); levert geen balk dat op, dan zegt het dat een balk op dat model niets filtert.
 **Uitkomst van `bench:bars` op set A + B (153 antwoorden per model, 2026-10-21).** Er is geen balk die voor Jev of
 Microsoft (eigen tekst van de router) goed van fout scheidt, dus `bars` in `catalog.json` blijft leeg:
 - Jev 1.14: van balk 50% tot 85% is 54% tot 59% van de zekere antwoorden goed, tegen 50% in het geheel; bij 90% is
   het 67%, maar dat zijn 15 antwoorden (p ≈ 0,09 tegen de rest). De eerste versie van het gereedschap stelde
-  daar 90% voor; het eist nu p < 0,01 omdat tien balken worden bekeken.
+  daar 90% voor; het eist nu dat de kans op toeval onder 5% gedeeld over de balken ligt die kunnen worden getoetst (bij tien balken p < 0,005), en de balken beginnen nu bij 20% omdat modellen die hun kans spreiden nooit de balken halen die bij Jev passen.
 - Microsoft Decision-1: 57% tot 61% bij elke balk. Zijn zekerheid zegt niets over of hij gelijk heeft.
 - Wat een balk dan doet: hij bepaalt hoe vaak de router van tier wisselt, niet hoe vaak hij gelijk heeft. Bij 75%
   houdt de router 46% (Microsoft) tot 72% (Jev) van de antwoorden vast. Of dat helpt, laat deze meting niet zien,

@@ -16,7 +16,7 @@ import { agreement, baselines, combine, compare, confusion, labelCounts, percent
 // @ts-expect-error plain JavaScript modules
 import { seeded, typedPrompt } from "../scripts/bench/extract.mjs";
 // @ts-expect-error plain JavaScript modules
-import { ask, catalog, routerAsks, run } from "../scripts/bench/run.mjs";
+import { ask, catalog, layaCatalog, routerAsks, run, specOf } from "../scripts/bench/run.mjs";
 
 const row = (label: string, pick: string | null, confidence = 0.9, ms = 100, cost = 0.00001) => ({ label, pick, confidence, ms, cost });
 
@@ -205,6 +205,11 @@ function standIn() {
         res.end(JSON.stringify({ data: [{ id: "typesafe/jev-1.14", name: "Jev 1.14", context_length: 8000, pricing: { prompt: "0.000000042" } }] }));
         return;
       }
+      if (req.url === "/v1/models") {
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ data: [{ id: "multilingual" }, { id: "english" }] }));
+        return;
+      }
       const body = JSON.parse(b);
       seen.push({ path: req.url ?? "", auth: req.headers.authorization, model: body.model, questions: Object.keys(body.questions), options: Object.keys(body.questions.tier.criteria) });
       const state: string = body.state;
@@ -221,6 +226,19 @@ function standIn() {
       const p = body.model === "unsure/model" ? 0.5 : 0.97;
       const probabilities = Object.fromEntries(options.map((t) => [t, t === tier ? p : (1 - p) / (options.length - 1)]));
       res.setHeader("content-type", "application/json");
+      if (req.url === "/v1/systemone") {
+        // A Laya server: its own `confidence` is another quantity; the Jev-scale number is x_jev_confidence.
+        const jevScale = body.model === "no-xjev" ? {} : { x_jev_confidence: p };
+        res.end(
+          JSON.stringify({
+            answers: {
+              tier: { type: "choice", choice: tier, probabilities, confidence: 0.01, ...jevScale },
+              effort: { type: "score", score: 2, probabilities: [0.1, 0.2, 0.4, 0.2, 0.1], confidence: 0.01, ...jevScale },
+            },
+          }),
+        );
+        return;
+      }
       res.end(
         JSON.stringify({
           id: "gen-dec-1",
@@ -301,6 +319,45 @@ describe("run, against a stand-in for the Decisions API", () => {
       const stray = async () => new Response(JSON.stringify({ answers: { tier: { type: "choice", choice: "fable", probabilities: { haiku: 0.1, fable: 0.9 } }, effort: { type: "score", score: 1 } } }), { status: 200 });
       const bad = await ask({ base: "http://x", api: "decisions", key: "k", model: "m", prompt: "p", offered: ["haiku", "sonnet"], fetchImpl: stray as unknown as typeof fetch });
       assert.equal(bad.error, "no usable tier");
+    } finally {
+      s.close();
+    }
+  });
+
+  test("a model written laya:<name> is asked on your Laya server, with its key or none", async () => {
+    assert.deepEqual(specOf("laya:multilingual"), { route: "laya", model: "multilingual" });
+    assert.deepEqual(specOf("perplexity/pplx-decider-v1.2"), { route: "openrouter", model: "perplexity/pplx-decider-v1.2" });
+    const s = await standIn();
+    try {
+      const open = await run({ cases: cases.slice(0, 2), models: ["laya:multilingual"], layaBase: s.base, layaKey: "", key: "or-key", base: "http://not-used", api: "decisions", confidence: "router" });
+      assert.ok(s.seen.every((x) => x.path === "/v1/systemone" && x.auth === undefined && x.model === "multilingual"));
+      // Read as the router reads Laya: x_jev_confidence (0.97), not its own `confidence` (0.01).
+      assert.equal(open.rows["laya:multilingual"][0].confidence, 0.97);
+      assert.deepEqual(open.rows["laya:multilingual"][0].xjev, { tier: true, effort: true });
+      const keyed = await run({ cases: cases.slice(0, 1), models: ["laya:multilingual"], layaBase: s.base, layaKey: "nas-key", key: "or-key", base: "http://not-used", api: "decisions" });
+      assert.equal(s.seen.at(-1)?.auth, "Bearer nas-key");
+      assert.equal(keyed.summaries["laya:multilingual"].answered, 1);
+    } finally {
+      s.close();
+    }
+  });
+
+  test("it says when the Jev-scale number is missing from a Laya answer", async () => {
+    const s = await standIn();
+    try {
+      const r = await run({ cases: cases.slice(0, 2), models: ["laya:no-xjev"], layaBase: s.base, base: "http://not-used", api: "decisions", key: "k", confidence: "router" });
+      assert.deepEqual(r.rows["laya:no-xjev"][0].xjev, { tier: false, effort: false });
+      // With none, the router derives it from the probabilities, so there is still a number.
+      assert.ok(r.rows["laya:no-xjev"][0].confidence > 0.9);
+    } finally {
+      s.close();
+    }
+  });
+
+  test("the models on a Laya server are listed", async () => {
+    const s = await standIn();
+    try {
+      assert.deepEqual(await layaCatalog({ base: s.base }), ["multilingual", "english"]);
     } finally {
       s.close();
     }

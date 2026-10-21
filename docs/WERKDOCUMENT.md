@@ -381,6 +381,17 @@ Beperkingen die ik wil noemen: het label is jouw oordeel over een prompt, niet o
 set van 80 prompts geeft een foutmarge van rond de tien procentpunt, dus verschillen van een paar punten
 zeggen niets; en latency is die vanaf jouw machine.
 
+**Eerste meting (2026-10-21, 79 eigen prompts, labels haiku 31 / sonnet 30 / opus 18 / fable 0).** Met fable
+uit de keuze (zoals op Pro): Jev 1.14 en Microsoft Decision-1 49% exact, Perplexity Flash 44%, v1.2 41%,
+Mercury 39%; "altijd haiku" 39%. Geen verschil met Jev is aantoonbaar (tekentoets p tussen 0,10 en 1,00).
+Jev en Microsoft kiezen in 81% van de gevallen hetzelfde en herkennen haiku en opus (Jev 68% en 78%
+goed), maar sonnet vrijwel niet (13%); de Perplexity-modellen ronden naar boven af (te hoog 43% tot 48%,
+te laag 11% tot 13%) en kosten dus meer, terwijl Flash het snelst is (p95 311 ms tegen 1215 ms voor Jev).
+Met alle vier de tiers aangeboden (inclusief fable, dat nooit gelabeld was) koos Jev fable in 29% van de
+gevallen: dat was een fout in de opzet, nu verholpen met `--tiers`. Conclusie: er is geen reden om van Jev af
+te stappen en geen bewijs dat een ander model beter is; Microsoft Decision-1 is een gelijkwaardige en
+goedkopere kandidaat. Volgende stap: een tweede, andere set prompts, en Laya.
+
 ## 6. Compaction
 
 - Voorlopig Claude's eigen compaction behouden, vanwege Laya's kleinere invoerbudget.

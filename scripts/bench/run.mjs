@@ -10,6 +10,10 @@
  *   node --experimental-strip-types scripts/bench/run.mjs --catalog     # the decision models on offer; needs no key
  *
  * Options:
+ *   laya:<model>               in --models: your own Laya server instead of OpenRouter, e.g. laya:multilingual.
+ *                               The address is LAYA_BASE_URL (or --laya-url), the key LAYA_API_KEY (none if the
+ *                               server asks for none). Its confidence is read from x_jev_confidence.
+ *   --laya-catalog              list the models your Laya server offers (GET <laya>/v1/models) and exit
  *   --tiers haiku,sonnet,opus   the tiers the model may choose from (default all four). Use the tiers the
  *                               router really offers you: on Pro with fable off, leave fable out, or the
  *                               model is asked to pick a tier you would never get.
@@ -26,14 +30,21 @@ import { fileURLToPath } from "node:url";
 
 import { requestBodyOf, stateOf } from "../../hooks/jev.ts";
 import { decisionOf, isContinuation, isEngineNudge, parseOverride } from "../../hooks/policy.ts";
-import { confidenceSourceOf, labelOf } from "../../hooks/provider.ts";
+import { confidenceSourceOf, layaBaseOf } from "../../hooks/provider.ts";
 import { agreement, report, summarize, table, TIERS } from "./metrics.mjs";
 
 const TIMEOUT_MS = 20_000;
 
+/** `laya:multilingual` is a model on your Laya server; anything else is an OpenRouter model id. */
+export function specOf(spec) {
+  const m = /^laya:(.+)$/.exec(spec);
+  return m ? { route: "laya", model: m[1] } : { route: "openrouter", model: spec };
+}
+
 /** One question to one model. Resolves to a row; never throws. */
-export async function ask({ base, api, key, model, prompt, offered = TIERS, fetchImpl = fetch }) {
-  const path = api === "systemone" ? "/api/v1/systemone" : "/api/alpha/decisions";
+export async function ask({ base, api, key, model, prompt, offered = TIERS, route = "openrouter", fetchImpl = fetch }) {
+  const laya = route === "laya";
+  const path = laya ? "/v1/systemone" : api === "systemone" ? "/api/v1/systemone" : "/api/alpha/decisions";
   const body = { ...requestBodyOf(stateOf(prompt), offered), model };
   const started = performance.now();
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -42,7 +53,8 @@ export async function ask({ base, api, key, model, prompt, offered = TIERS, fetc
     try {
       const res = await fetchImpl(`${base}${path}`, {
         method: "POST",
-        headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+        // A Laya server on your own network may ask for no key.
+        headers: { ...(key === "" ? {} : { authorization: `Bearer ${key}` }), "content-type": "application/json" },
         body: JSON.stringify(body),
         signal: controller.signal,
       });
@@ -60,7 +72,7 @@ export async function ask({ base, api, key, model, prompt, offered = TIERS, fetc
         return { pick: null, ms, error: "not JSON" };
       }
       // The router's own reading of the answer, and the one every model is measured by.
-      const source = confidenceSourceOf("openrouter", model);
+      const source = confidenceSourceOf(route, model);
       const router = decisionOf(json.answers, offered, source);
       const common = decisionOf(json.answers, offered, "probabilities");
       if (router === null || common === null) return { pick: null, ms, error: "no usable tier" };
@@ -73,6 +85,15 @@ export async function ask({ base, api, key, model, prompt, offered = TIERS, fetc
         ms,
         ...(cost !== undefined ? { cost } : {}),
         ...(typeof json.model === "string" ? { resolved: json.model } : {}),
+        // Whether the Jev-scale number was where it was expected, for a Laya server.
+        ...(laya
+          ? {
+              xjev: {
+                tier: typeof json.answers?.tier?.x_jev_confidence === "number",
+                effort: typeof json.answers?.effort?.x_jev_confidence === "number",
+              },
+            }
+          : {}),
       };
     } catch (e) {
       if (attempt === 1 || controller.signal.aborted) return { pick: null, ms: performance.now() - started, error: controller.signal.aborted ? "timed out" : "request failed" };
@@ -99,11 +120,15 @@ async function pool(items, size, fn) {
 }
 
 /** Runs every model over every case. Returns { rows: { model: row[] }, summaries, agreement }. */
-export async function run({ cases, models, base, api, key, concurrency = 4, confidence = "probabilities", offered = TIERS, fetchImpl }) {
+export async function run({ cases, models, base, api, key, layaBase, layaKey = "", concurrency = 4, confidence = "probabilities", offered = TIERS, fetchImpl }) {
   const rows = {};
-  for (const model of models) {
-    rows[model] = await pool(cases, concurrency, async (c) => {
-      const r = await ask({ base, api, key, model, prompt: c.prompt, offered, fetchImpl });
+  for (const spec of models) {
+    const { route, model } = specOf(spec);
+    rows[spec] = await pool(cases, concurrency, async (c) => {
+      const r =
+        route === "laya"
+          ? await ask({ base: layaBase, api, key: layaKey, model, prompt: c.prompt, offered, route, fetchImpl })
+          : await ask({ base, api, key, model, prompt: c.prompt, offered, fetchImpl });
       return { id: c.id, label: c.tier, ...r, confidence: confidence === "router" ? r.confidence : r.confidenceP };
     });
   }
@@ -119,6 +144,14 @@ export async function run({ cases, models, base, api, key, concurrency = 4, conf
  */
 export function routerAsks(prompt) {
   return !isContinuation(prompt) && !isEngineNudge(prompt) && parseOverride(prompt) === null;
+}
+
+/** The models your Laya server lists, as lines. */
+export async function layaCatalog({ base, key = "", fetchImpl = fetch }) {
+  const res = await fetchImpl(`${base}/v1/models`, { headers: key === "" ? {} : { authorization: `Bearer ${key}` } });
+  if (!res.ok) throw new Error(`laya models: HTTP ${res.status}`);
+  const json = await res.json();
+  return (json.data ?? json.models ?? []).map((m) => (typeof m === "string" ? m : m.id ?? m.name ?? JSON.stringify(m)));
 }
 
 /** The decision models OpenRouter lists, as lines. */
@@ -144,10 +177,23 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     for (const m of await catalog({ base })) console.log(`${m.id.padEnd(44)} context ${String(m.context ?? "?").padEnd(8)} $/token in ${m.price ?? "?"}`);
     process.exit(0);
   }
+  const layaUrl = layaBaseOf(arg("laya-url", process.env.LAYA_BASE_URL));
+  const layaKey = (process.env.LAYA_API_KEY ?? "").trim();
+  if (process.argv.includes("--laya-catalog")) {
+    if (!layaUrl.ok) throw new Error(layaUrl.reason);
+    for (const id of await layaCatalog({ base: layaUrl.base, key: layaKey })) console.log(id);
+    process.exit(0);
+  }
   const key = process.env.OPENROUTER_API_KEY;
   const casesFile = arg("cases");
-  if (!key || !casesFile) {
-    console.error("usage: OPENROUTER_API_KEY=… run.mjs --cases cases.jsonl --models a/b,c/d   (or --catalog)");
+  const wanted = arg("models", "typesafe/jev-1.14").split(",").map((m) => m.trim()).filter(Boolean);
+  const needsOpenRouter = wanted.some((m) => specOf(m).route === "openrouter");
+  if (!casesFile || (needsOpenRouter && !key)) {
+    console.error("usage: OPENROUTER_API_KEY=… run.mjs --cases cases.jsonl --models a/b,c/d,laya:multilingual   (or --catalog)");
+    process.exit(2);
+  }
+  if (wanted.some((m) => specOf(m).route === "laya") && !layaUrl.ok) {
+    console.error(layaUrl.reason.replace("JEV_ROUTER_PROVIDER=laya but ", ""));
     process.exit(2);
   }
   const all = readFileSync(casesFile, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
@@ -165,12 +211,15 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   }
   const outside = cases.filter((c) => !offered.includes(c.tier)).length;
   if (outside > 0) console.log(`${outside} labelled prompts carry a tier that is not offered (${TIERS.filter((t) => !offered.includes(t)).join(", ")}); no model can match them.`);
-  const models = arg("models", "typesafe/jev-1.14").split(",").map((m) => m.trim()).filter(Boolean);
+  const models = wanted;
   const mode = arg("confidence", "probabilities");
-  const result = await run({ cases, models, base, api: arg("api", "decisions"), key, concurrency: Number(arg("concurrency", "4")), confidence: mode, offered });
+  const result = await run({ cases, models, base, api: arg("api", "decisions"), key, layaBase: layaUrl.ok ? layaUrl.base : undefined, layaKey, concurrency: Number(arg("concurrency", "4")), confidence: mode, offered });
   console.log(`${cases.length} labelled prompts, ${models.length} models offered ${offered.join(", ")}, confidence read from ${mode === "router" ? "what the router reads" : "the probabilities"}\n`);
   console.log(table(result.summaries));
   for (const [model, rows] of Object.entries(result.rows)) {
+    const answered = rows.filter((r) => r.xjev);
+    if (answered.length > 0)
+      console.log(`\n${model}: x_jev_confidence was on the tier answer in ${answered.filter((r) => r.xjev.tier).length} of ${answered.length} answers, on the effort answer in ${answered.filter((r) => r.xjev.effort).length}.`);
     const counts = {};
     for (const r of rows) if (r.error) counts[r.error] = (counts[r.error] ?? 0) + 1;
     if (Object.keys(counts).length > 0)

@@ -529,6 +529,7 @@ async function seedSettings(
     OPENCODE_API_KEY: await $.env.get("OPENCODE_API_KEY"),
     LAYA_BASE_URL: await $.env.get("LAYA_BASE_URL"),
     LAYA_API_KEY: await $.env.get("LAYA_API_KEY"),
+    LAYA_MODEL: await $.env.get("LAYA_MODEL"),
   });
   return {
     provider: routes.ok ? routes.providers[0]! : routes,

@@ -349,6 +349,15 @@ describe("Laya on your own server", () => {
     assert.strictEqual(p.model, "laya-0.4");
   });
 
+  it("LAYA_MODEL names the model on the server, and does not reach the other providers in a list", () => {
+    const r = providersOf(env({ LAYA_BASE_URL: "https://jev.2631.eu", LAYA_MODEL: "multilingual", OPENROUTER_API_KEY: "or", JEV_ROUTER_PROVIDER: "laya,openrouter" }));
+    assert.ok(r.ok);
+    assert.deepStrictEqual(r.providers.map((p) => [p.name, p.model]), [["laya", "multilingual"], ["openrouter", "typesafe/jev-1.14"]]);
+    const both = providerOf(env({ LAYA_BASE_URL: "https://jev.2631.eu", LAYA_MODEL: "multilingual", JEV_ROUTER_JEV_MODEL: "other" }));
+    assert.ok(both.ok);
+    assert.strictEqual(both.model, "multilingual", "LAYA_MODEL wins for Laya");
+  });
+
   it("comes after a TypeSafe key and before the gateway's when nothing is named", () => {
     const laya = { LAYA_BASE_URL: "https://nas.lan" };
     assert.strictEqual(providerOf(env({ ...laya, TYPESAFE_API_KEY: "ts" })).ok && (providerOf(env({ ...laya, TYPESAFE_API_KEY: "ts" })) as { name: string }).name, "typesafe");

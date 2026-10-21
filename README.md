@@ -442,6 +442,7 @@ All settings go in the `env` block of `~/.claude/settings.json`.
 | `OPENCODE_API_KEY` | | OpenCode Console key, for `JEV_ROUTER_PROVIDER=opencode`. Also set `JEV_ROUTER_JEV_MODEL`: the router does not know OpenCode's id for Jev. |
 | `JEV_ROUTER_API` | `systemone` | `decisions` makes the `openrouter` route use OpenRouter's Decisions API (`/api/alpha/decisions`) instead of its System One endpoint. Same questions and answers, and it also serves the other decision models in OpenRouter's catalog: name one in `JEV_ROUTER_JEV_MODEL` (`npm run bench:run -- --catalog` lists them). A model that is not Jev is read for its probabilities only, and named on the route line (`pplx-decider-v1.2 96%`). The API is alpha. |
 | `LAYA_BASE_URL` | | Your own Laya server, e.g. `https://nas.lan:8443`. https only, any host, no login in the URL; a trailing `/v1/systemone` is dropped. Setting it alone makes Laya the provider. |
+| `LAYA_MODEL` | `laya` | The model on your Laya server, e.g. `multilingual`. Use this rather than `JEV_ROUTER_JEV_MODEL` when Laya is one of several providers: that one reaches them all. |
 | `LAYA_API_KEY` | | Sent to the Laya server and nowhere else; leave unset for a server that asks for none. |
 | `JEV_ROUTER_PROVIDER` | TypeSafe if its key is set, else Laya if `LAYA_BASE_URL` is set, else the gateway | One of `typesafe` (or `direct`), `gateway` (or `vercel`), `openrouter`, `commandcode`, `opencode`, `laya`, or a list tried in order, e.g. `laya,openrouter`. A named route without its key or URL is an error. OpenRouter, Command Code and OpenCode are never chosen by their key alone, since those keys are used for other things; anything unrecognised chooses by the keys set. |
 | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | Must be https. Only `*.typesafe.ai` is accepted unless `JEV_ROUTER_ALLOW_CUSTOM_BASE=1`. A trailing `/v1/systemone` is dropped, since the router adds it. |
@@ -468,6 +469,7 @@ own prompts: `npm run bench:extract` pulls the prompts you typed out of Claude C
 transcripts (locally, into `cases.jsonl`, which is git-ignored), `npm run bench:label`
 asks you for the tier each needs (1 haiku … 4 fable), and
 `OPENROUTER_API_KEY=… npm run bench:run -- --cases cases.jsonl --tiers haiku,sonnet,opus --models typesafe/jev-1.14,perplexity/pplx-decider-v1.2`
+(add `laya:<model>`, e.g. `laya:multilingual`, to ask your own Laya server too: its address is `LAYA_BASE_URL`, its key `LAYA_API_KEY`, and `--laya-catalog` lists its models)
 asks each model the router's own questions (`--tiers` limits the tiers on offer to the ones you really have: with Fable off, leave it out, or the models are asked to pick a tier you would never get) and prints, per model: how often it picks
 your tier, how often too low or too high, its calibration, how many answers clear the
 75% bar and how right those are, latency, and cost per thousand decisions, then your

@@ -70,6 +70,8 @@ export type ProviderEnv = {
   OPENCODE_API_KEY?: string | undefined;
   LAYA_BASE_URL?: string | undefined;
   LAYA_API_KEY?: string | undefined;
+  /** The model on your Laya server (`multilingual`); wins over JEV_ROUTER_JEV_MODEL, which in a list of providers would reach them all. */
+  LAYA_MODEL?: string | undefined;
 };
 
 const TYPESAFE_MODEL_DEFAULT = "jev-latest";
@@ -249,7 +251,7 @@ function build(name: RouteName, env: ProviderEnv): ProviderResult {
         ok: true,
         name: "laya",
         endpoint: `${base.base}/v1/systemone`,
-        model: pinned || "laya",
+        model: (env.LAYA_MODEL ?? "").trim() || pinned || "laya",
         // A server on your own network may ask for no key.
         apiKey: keyOf(env.LAYA_API_KEY) ?? "",
       };

@@ -392,6 +392,23 @@ gevallen: dat was een fout in de opzet, nu verholpen met `--tiers`. Conclusie: e
 te stappen en geen bewijs dat een ander model beter is; Microsoft Decision-1 is een gelijkwaardige en
 goedkopere kandidaat. Volgende stap: een tweede, andere set prompts, en Laya.
 
+**Laya op de NAS (2026-10-21, dezelfde 79 prompts, fable uit).** De server meldt twee modellen,
+`jev-router` en `jev-latest`, die identieke antwoorden geven (100% overeenstemming), en de
+`multilingual` waar de plugin op kan vragen:
+- `jev-router` / `jev-latest`: 28% exact, 61% te hoog; kiest haiku 1 keer van de 79. Tekentoets tegen Jev
+  p = 0,02 (Jev alleen goed 32, Laya alleen goed 15).
+- `multilingual`: 43% exact, 99% binnen één tier. Dat laatste komt doordat het 64 van de 79 keer sonnet
+  zegt: "altijd sonnet" haalt 38% exact en 100% binnen één tier. Het onderscheidt haiku-prompts (29 van 31
+  naar sonnet) niet van sonnet-prompts. Tegen Jev p = 0,59, maar de twee kiezen in 15% van de gevallen
+  hetzelfde.
+- Zekerheid uit de kansen: 0% tot 3% van de antwoorden haalt de balk van 75%. Met de standaardbalk zou de
+  router op Laya bijna nooit van tier wisselen.
+- Snelheid vanaf de Mac naar `jev.2631.eu`: gemiddeld 1,35 s (`multilingual`) tot 2,1 s, p95 1,9 s tot 3,3 s.
+  Dat is boven de standaard-wachttijd van 1,5 s: de meeste beurten zouden ongerouteerd blijven, en met een
+  langere wachttijd (`JEV_ROUTER_TIMEOUT_MS`, hoogstens 8000) duurt elke beurt 2 tot 3 s langer.
+Voorlopige conclusie: in deze opstelling is Laya geen alternatief voor Jev 1.14. Wat niet is uitgezocht:
+of de snelheid aan het netwerk of aan de NAS ligt, en hoe groot dat model is.
+
 ## 6. Compaction
 
 - Voorlopig Claude's eigen compaction behouden, vanwege Laya's kleinere invoerbudget.

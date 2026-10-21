@@ -109,7 +109,14 @@ last 20 sessions.
 
    Without `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS` the plugin loads and silently
    does nothing.
-3. **Install it.** Place the folder at `~/.claude/skills/jev-claude-router/` to load
+3. **Install it.** Straight from GitHub, no clone needed:
+
+   ```
+   /plugin marketplace add Daltonganger/jev-claude-router
+   /plugin install jev-claude-router --marketplace Daltonganger/jev-claude-router
+   ```
+
+   Or place the folder at `~/.claude/skills/jev-claude-router/` to load
    it in every session, or run `claude --plugin-dir /path/to/jev-claude-router` for
    one session.
 4. **Check it.** `npm run check-jev` reports the provider and whether it

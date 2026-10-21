@@ -1,0 +1,11 @@
+{
+  "name": "jev-claude-router",
+  "owner": { "name": "Ruben Beuker" },
+  "plugins": [
+    {
+      "name": "jev-claude-router",
+      "source": "./",
+      "description": "Routes each Claude Code turn to the model and effort a decision model (Jev) picks, weighed against what a switch costs."
+    }
+  ]
+}

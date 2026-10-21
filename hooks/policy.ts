@@ -423,6 +423,38 @@ export function thresholdOf(raw: string | undefined): number {
 }
 
 /**
+ * Confidence bars by decision model, for the ones whose confidence does not
+ * mean what Jev's does. A key is a full model id (`microsoft/microsoft-decision-1`),
+ * the part after its `/` (`microsoft-decision-1`), or a route name (`laya`), lowercase;
+ * a value is a bar as `confidenceShareOf` reads it.
+ */
+export type Bars = Readonly<Record<string, number>>;
+
+const BAR_KEY = /^[\w.:@/-]{1,100}$/;
+
+/** `JEV_ROUTER_DECIDER_BARS`: `microsoft-decision-1=0.85,laya=60%`. A pair that does not parse is left out. */
+export function barsOf(raw: string | undefined): Bars {
+  const out: Record<string, number> = Object.create(null);
+  for (const pair of (raw ?? "").split(/[,;\s]+/)) {
+    const at = pair.indexOf("=");
+    if (at <= 0) continue;
+    const key = pair.slice(0, at).trim().toLowerCase();
+    const bar = confidenceShareOf(pair.slice(at + 1));
+    if (BAR_KEY.test(key) && bar !== null) out[key] = bar;
+  }
+  return out;
+}
+
+/** The bar for the decider that answered, or undefined when none is set for it. */
+export function barFor(bars: Bars, via: string | undefined, model: string | undefined): number | undefined {
+  const id = (model ?? "").toLowerCase();
+  for (const key of [id, id.slice(id.lastIndexOf("/") + 1), (via ?? "").toLowerCase()])
+    // Own keys only: `constructor` or `__proto__` as a model id must not find something inherited.
+    if (key !== "" && Object.hasOwn(bars, key) && typeof bars[key] === "number") return bars[key];
+  return undefined;
+}
+
+/**
  * A confidence bar as a share strictly between 0 and 1, or null. `0.6`,
  * `60` and `60%` are the same bar; anything written with `%` is a
  * percentage, so `0.5%` is half a percent, not half. Without `%`, a number

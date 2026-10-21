@@ -31,6 +31,9 @@
   that is not Jev is read for its probabilities only and named on the route line.
 - **`bench:run --criteria`** tries other wording for the tier descriptions against the router's
   own, and **`bench:extract --exclude`** draws a second set of prompts that shares none with the first.
+- **A confidence bar for each decision model**: `JEV_ROUTER_DECIDER_BARS` (and `bars` in
+  `catalog.json`) set the bar the sticky logic uses for the model that answered, since another
+  model's confidence is not Jev's. `bench:bars` shows where a bar would help.
 - **`bench`** adds a rough cost index against your labels, from the router's own output prices.
 - **`LAYA_MODEL`** names the model on your Laya server without reaching the other
   providers in a list. `scripts/bench` asks a Laya server too (`laya:<model>`).

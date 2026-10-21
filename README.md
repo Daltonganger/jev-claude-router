@@ -475,7 +475,7 @@ your tier, how often too low or too high, its calibration, how many answers clea
 75% bar and how right those are, latency, and cost per thousand decisions, then your
 label counts, what always saying one tier would score (and costs: a rough index against following your labels, in the `cost vs your labels` column), a confusion matrix per model and
 a sign test against the first model. `npm run bench:report -- bench-results.json` prints
-it all again without asking anything; given several files (`bench:report -- a.json b.json`) it puts
+it all again without asking anything (`bench:bars` shows, per model, how many answers reach each confidence bar and how often those are right, and suggests one if any bar helps); given several files (`bench:report -- a.json b.json`) it puts
 their models side by side, so a model run later is compared with the earlier ones without
 asking those again (same prompts, same `--tiers`). Prompts the router never sends to the model (a bare
 go-ahead, an engine nudge, a tier named in the prompt) are left out. The prompts go to
@@ -497,6 +497,7 @@ flattered by them, so choose on one set and confirm on another that shares nothi
 | --- | --- | --- |
 | `JEV_ROUTER_STICKY` | on | `0` removes the confidence bar. |
 | `JEV_ROUTER_STICKY_CONFIDENCE` | `0.75` | The confidence bar: `0.6`, `60` or `60%`. |
+| `JEV_ROUTER_DECIDER_BARS` | | A bar for particular decision models, in place of the one above: `microsoft-decision-1=0.5,laya=60%`. A key is a full model id, the id after its `/`, or a route name. For a model whose confidence is not Jev's (`bench:bars` shows where one would help), and `catalog.json` can recommend one for everyone (`bars`). A bar you set for every decider yourself keeps the catalog's out; one you name for a model is always yours; `/jev sticky` overrides all. |
 | `JEV_ROUTER_PRICE_CHECK` | on | `0` turns both price checks off. |
 | `JEV_ROUTER_UPGRADE_MAX` | `1` | Dollars an upgrade may cost over staying (a plain number, `$` allowed), or `off`. |
 | `JEV_ROUTER_CACHE_TTL` | `1h` | Cache lifetime used for pricing: `1h` (what Claude Code writes) or `5m`. |

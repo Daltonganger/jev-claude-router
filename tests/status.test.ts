@@ -1786,3 +1786,47 @@ describe("status: a provider's spelling of the model asked is the model asked (2
       assert.match(statusReport({ ...base, sessionModel: got, running: d }), /still on it/);
     });
 });
+
+describe("attemptOf holds each decider to its own bar (2026-10-21)", () => {
+  const onSonnet = { tier: "sonnet", model: "claude-sonnet-5-5", effort: "medium", confidence: 0.9 } as const;
+  /** An answer from `model` that wants opus with probability `p` among the three tiers on offer. */
+  const answerFrom = (model: string, via: "openrouter" | "laya", p: number) => ({
+    ok: true as const,
+    ms: 5,
+    via,
+    model,
+    answers: {
+      tier: { type: "choice", choice: "opus", probabilities: { haiku: (1 - p) / 2, sonnet: (1 - p) / 2, opus: p } },
+      effort: { type: "score", score: 2, probabilities: [0.1, 0.2, 0.4, 0.2, 0.1] },
+    },
+  });
+  const offered = ["haiku", "sonnet", "opus"] as const;
+
+  test("a model with a lower bar moves where the session's bar would hold", () => {
+    // Read from the probabilities, 0.7 on opus of three is (3·0.7 − 1)/2 = 0.55: under 0.75, over 0.5.
+    const answer = answerFrom("microsoft/microsoft-decision-1", "openrouter", 0.7);
+    const held = attemptOf("implement it", answer, offered, { sticky: 0.75, running: onSonnet });
+    assert.ok("decision" in held);
+    assert.equal(held.decision.tier, "sonnet", "55% does not clear 75%");
+    const own = attemptOf("implement it", answer, offered, { sticky: 0.75, bars: { "microsoft-decision-1": 0.5 }, running: onSonnet });
+    assert.ok("decision" in own);
+    assert.equal(own.decision.tier, "opus", "55% clears the 50% set for this model");
+  });
+
+  test("a bar for one model does not touch another's, and none is set for a failed answer", () => {
+    const jev = { ...answerFrom("typesafe/jev-1.14", "openrouter", 0.7), answers: { tier: { type: "choice", choice: "opus", confidence: 0.55 }, effort: { type: "score", score: 2 } } };
+    const other = attemptOf("implement it", jev, offered, { sticky: 0.75, bars: { "microsoft-decision-1": 0.5 }, running: onSonnet });
+    assert.ok("decision" in other);
+    assert.equal(other.decision.tier, "sonnet");
+    const failed = attemptOf("implement it", { ok: false, reason: "timed out", ms: 1 }, offered, { sticky: 0.75, bars: { laya: 0.1 }, running: onSonnet });
+    assert.ok("skipped" in failed);
+    assert.match(failed.skipped, /timed out/);
+  });
+
+  test("with stickiness off there is no bar to set", () => {
+    const answer = answerFrom("microsoft/microsoft-decision-1", "openrouter", 0.7);
+    const off = attemptOf("implement it", answer, offered, { sticky: null, bars: { "microsoft-decision-1": 0.99 }, running: onSonnet });
+    assert.ok("decision" in off);
+    assert.equal(off.decision.tier, "opus");
+  });
+});

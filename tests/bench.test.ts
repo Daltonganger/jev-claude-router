@@ -12,11 +12,13 @@ import { join } from "node:path";
 import { describe, test } from "node:test";
 
 // @ts-expect-error plain JavaScript modules
-import { agreement, baselines, combine, compare, confusion, costIndex, OUTPUT_PRICE, labelCounts, percentile, report, summarize, table } from "../scripts/bench/metrics.mjs";
+import { agreement, barTable, baselines, combine, compare, confusion, costIndex, OUTPUT_PRICE, suggestBar, labelCounts, percentile, report, summarize, table } from "../scripts/bench/metrics.mjs";
 // @ts-expect-error plain JavaScript modules
 import { seeded, typedPrompt } from "../scripts/bench/extract.mjs";
 // @ts-expect-error plain JavaScript modules
 import { merge } from "../scripts/bench/report.mjs";
+// @ts-expect-error plain JavaScript modules
+import { barsReport, pool } from "../scripts/bench/bars.mjs";
 // @ts-expect-error plain JavaScript modules
 import { ask, catalog, layaCatalog, OPTIONS, routerAsks, run, specOf, unknownOption, wordingOf } from "../scripts/bench/run.mjs";
 
@@ -314,6 +316,51 @@ describe("what following a model costs against your labels", () => {
   test("the prices are the router's own", async () => {
     const { PRICE } = await import("../hooks/pricing.ts");
     for (const tier of ["haiku", "sonnet", "opus", "fable"] as const) assert.equal(OUTPUT_PRICE[tier], PRICE[tier].output, tier);
+  });
+});
+
+describe("where a bar would help", () => {
+  const r = (right: boolean, confidence: number) => ({ label: "opus", pick: right ? "opus" : "haiku", confidence, ms: 1 });
+  // 40 answers: the 20 at 0.55 are right half the time, the 20 at 0.9 nine times in ten.
+  const informative = [
+    ...[...Array(20)].map((_, i) => r(i < 10, 0.55)),
+    ...[...Array(20)].map((_, i) => r(i < 18, 0.9)),
+  ];
+  // A model equally sure whether right or wrong.
+  const flat = [...Array(40)].map((_, i) => r(i % 2 === 0, 0.8));
+
+  test("for each bar, how many answers reach it and how often those are right", () => {
+    const t = barTable(informative);
+    const at = (bar: number) => t.find((b: { bar: number }) => b.bar === bar);
+    assert.deepEqual(at(0.5), { bar: 0.5, n: 40, share: 1, accuracy: 28 / 40 });
+    assert.deepEqual(at(0.9), { bar: 0.9, n: 20, share: 0.5, accuracy: 0.9 });
+    assert.equal(at(0.95).n, 0);
+    assert.equal(at(0.95).accuracy, null);
+  });
+
+  test("the lowest bar that lifts the confident answers clearly above the rest", () => {
+    const pick = suggestBar(informative);
+    assert.equal(pick.bar, 0.6, "from 0.6 only the 0.9 answers remain: 90% against 70% overall");
+    assert.equal(pick.accuracy, 0.9);
+    assert.equal(pick.overall, 0.7);
+  });
+
+  test("a model whose confidence says nothing gets no bar, and the report says so", () => {
+    assert.equal(suggestBar(flat), null);
+    assert.match(barsReport({ flat }), /No bar helps/);
+    assert.match(barsReport({ informative }), /Suggested bar 60%: 50% of answers reach it, 90% of those are right, against 70% overall/);
+  });
+
+  test("a bar over fewer answers than it takes to tell is not suggested", () => {
+    const few = [...Array(10)].map(() => r(true, 0.95)).concat([...Array(30)].map((_, i) => r(i < 12, 0.5)));
+    assert.equal(suggestBar(few, { minAnswers: 15 }), null);
+    assert.ok(suggestBar(few, { minAnswers: 5 }));
+  });
+
+  test("results files are pooled per model name", () => {
+    const merged = pool([{ rows: { a: [r(true, 0.9)], b: [r(true, 0.9)] } }, { rows: { a: [r(false, 0.9)] } }]);
+    assert.equal(merged.a.length, 2);
+    assert.equal(merged.b.length, 1);
   });
 });
 

@@ -117,6 +117,16 @@ describe("parseCatalog", () => {
     assert.strictEqual(parsed(f).plans.pro?.note?.length, 200);
   });
 
+  it("reads confidence bars by model, and drops one that is not a bar", () => {
+    const f = file() as any;
+    f.bars = { "Microsoft/Microsoft-Decision-1": 0.85, laya: 0.5, bad: 1.2, zero: 0, text: "high", "bad key!": 0.5 };
+    const r = parseCatalog(f);
+    assert.ok(r.ok);
+    assert.deepStrictEqual(r.catalog.bars, { "microsoft/microsoft-decision-1": 0.85, laya: 0.5 });
+    assert.deepStrictEqual(r.dropped.sort(), ["bar bad", "bar bad key!", "bar text", "bar zero"]);
+    assert.deepStrictEqual(parsed(file()).bars, {}, "a file without bars has none");
+  });
+
   it("ignores keys it does not know", () => {
     const r = parseCatalog({ ...file(), note: "hi", future: { a: 1 } });
     assert.ok(r.ok);

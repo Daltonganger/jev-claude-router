@@ -450,6 +450,17 @@ bespaart op deze prompts dus nauwelijks iets tegenover altijd sonnet, omdat hij 
 bespaart ruim 20% op A en 28% op B tegenover altijd sonnet. Voorbehoud: elke prompt telt even zwaar en je label
 geldt als de juiste tier.
 
+**Een balk per beslismodel (gebouwd).** De standaardbalk van 75% is op Jev afgestemd. Microsofts zekerheid filtert
+bijna niets (tot 80% van zijn antwoorden haalt de balk, maar die zijn maar ongeveer 58% goed). Daarom:
+`JEV_ROUTER_DECIDER_BARS` (`microsoft-decision-1=0.5,laya=60%`; sleutel = volledig id, id na de `/`, of
+routenaam) en `bars` in `catalog.json` voor een aanbeveling aan iedereen. Voorrang: de balk die je voor dat model
+noemt, dan een balk die je voor alle beslismodellen zelf zet (houdt de catalogus buiten), dan de catalogus, dan de
+standaard; `/jev sticky` is het woord van de gebruiker voor alle modellen. `/jev` toont de balken per model.
+`npm run bench:bars -- a.json b.json` toont per model hoeveel antwoorden elke balk halen en hoe vaak die goed zijn,
+en stelt de laagste balk voor waarbij de zekere antwoorden duidelijk beter zijn dan de rest (minstens 15
+antwoorden, minstens 10 punten); levert geen balk dat op, dan zegt het dat een balk op dat model niets filtert.
+**De aanbevolen waarde voor Microsoft is nog niet ingevuld**: die komt uit `bench:bars` op de bestaande resultaten.
+
 ## 6. Compaction
 
 - Voorlopig Claude's eigen compaction behouden, vanwege Laya's kleinere invoerbudget.

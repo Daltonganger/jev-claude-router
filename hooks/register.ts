@@ -27,6 +27,8 @@ import {
   offeredTiers,
   overrideAllowedOf,
   PLAN_NOTES,
+  barsOf,
+  confidenceShareOf,
   planExclusions,
   planOf,
   setEffortSupport,
@@ -40,6 +42,7 @@ import {
   DEFAULT_CEILING,
   EFFORTS,
   TIERS,
+  type Bars,
   type Ceiling,
   type Decision,
   type Effort,
@@ -342,6 +345,8 @@ type Settings = {
   offered: readonly Tier[];
   excluded: readonly Tier[];
   sticky: number | null;
+  /** Bars for particular decision models (env, then the catalog's), in place of `sticky` for the one that answered. */
+  bars: Bars;
   ceiling: Ceiling;
   ttl: Ttl;
   allowOverride: boolean;
@@ -540,6 +545,12 @@ async function seedSettings(
     sticky: stickyOf(await $.env.get("JEV_ROUTER_STICKY"))
       ? thresholdOf(await $.env.get("JEV_ROUTER_STICKY_CONFIDENCE"))
       : null,
+    // Per model: the environment's, then the catalog's. A bar you set for every decider yourself
+    // keeps the catalog's recommendations out; one you name for a model is always yours.
+    bars: {
+      ...(confidenceShareOf(await $.env.get("JEV_ROUTER_STICKY_CONFIDENCE")) === null ? (catalog?.bars ?? {}) : {}),
+      ...barsOf(await $.env.get("JEV_ROUTER_DECIDER_BARS")),
+    },
     ceiling: ceilingOf(await $.env.get("JEV_ROUTER_CEILING")),
     ttl: ttlOf(await $.env.get("JEV_ROUTER_CACHE_TTL")),
     allowOverride: overrideAllowedOf(
@@ -1792,6 +1803,7 @@ export function register(on: On) {
         providers: settings.providers.map((p) => p.name),
         timeoutMs: settings.timeoutMs,
         sticky: settings.sticky,
+        ...(overridden.has("sticky") ? {} : { bars: settings.bars }),
         upgradeMax: settings.upgradeMax,
         price: settings.priceCheck,
         ceiling: settings.ceiling,
@@ -2037,6 +2049,8 @@ export function register(on: On) {
         offered,
         {
           sticky: settings.sticky,
+          // `/jev sticky` is the person's word for every decider.
+          ...(overridden.has("sticky") ? {} : { bars: settings.bars }),
           running,
           forced,
           ceiling,

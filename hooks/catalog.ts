@@ -74,6 +74,8 @@ export type Catalog = {
   models: Record<string, CatalogModel>;
   plans: Record<string, CatalogPlan>;
   deciders: Record<string, CatalogDecider>;
+  /** Confidence bars by decision model, as `barsOf` keys them: for the models whose confidence is not Jev's. */
+  bars: Record<string, number>;
 };
 
 export type ParseResult =
@@ -196,8 +198,15 @@ export function parseCatalog(raw: unknown): ParseResult {
     else deciders[name] = decider;
   }
 
+  const bars: Record<string, number> = {};
+  for (const [key, value] of Object.entries(isRecord(raw.bars) ? raw.bars : {})) {
+    if (/^[\w.:@/-]{1,100}$/.test(key) && typeof value === "number" && Number.isFinite(value) && value > 0 && value < 1)
+      bars[key.toLowerCase()] = value;
+    else dropped.push(`bar ${key.slice(0, 60)}`);
+  }
+
   const updated = typeof raw.updated === "string" ? raw.updated.slice(0, 32) : "";
-  return { ok: true, catalog: { schema: raw.schema, updated, models, plans, deciders }, dropped };
+  return { ok: true, catalog: { schema: raw.schema, updated, models, plans, deciders, bars }, dropped };
 }
 
 /**

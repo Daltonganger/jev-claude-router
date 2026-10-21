@@ -3,6 +3,8 @@ import { afterEach, describe, test } from "node:test";
 
 import {
   asAsked,
+  barFor,
+  barsOf,
   capTo,
   ceilingAt,
   ceilingOf,
@@ -1125,5 +1127,29 @@ describe("decisionOf for another decision model (2026-10-21)", () => {
     const d = decisionOf({ tier: { type: "choice", choice: "opus", confidence: 0.99 }, effort: { type: "score", score: 2, confidence: 0.99 } }, TIERS, "probabilities");
     assert.equal(d?.confidence, 0);
     assert.equal(d?.effortConfidence, 0);
+  });
+});
+
+describe("confidence bars by decision model", () => {
+  test("a pair is a model, or a route, and a bar as any bar is written", () => {
+    const bars = barsOf("microsoft/microsoft-decision-1=0.85, laya=60%; Bad=1.5 ; =0.5 ; nobar ; x=0");
+    assert.deepEqual({ ...bars }, { "microsoft/microsoft-decision-1": 0.85, laya: 0.6 });
+    assert.deepEqual({ ...barsOf(undefined) }, {});
+    // A name that is also on every object is only ever found when it was set.
+    assert.equal(barFor({}, "constructor", "__proto__"), undefined);
+    assert.equal(barFor({ ...barsOf("") }, "toString", undefined), undefined);
+  });
+
+  test("the full model id wins, then the id without its prefix, then the route", () => {
+    const bars = barsOf("microsoft/microsoft-decision-1=0.9, microsoft-decision-1=0.8, laya=0.4");
+    assert.equal(barFor(bars, "openrouter", "microsoft/microsoft-decision-1"), 0.9);
+    assert.equal(barFor(barsOf("microsoft-decision-1=0.8"), "openrouter", "microsoft/microsoft-decision-1"), 0.8);
+    assert.equal(barFor(bars, "laya", "multilingual"), 0.4);
+    assert.equal(barFor(bars, "openrouter", "typesafe/jev-1.14"), undefined);
+    assert.equal(barFor(bars, undefined, undefined), undefined);
+  });
+
+  test("an id is matched without regard to case", () => {
+    assert.equal(barFor(barsOf("Laya=0.4"), "LAYA", undefined), 0.4);
   });
 });

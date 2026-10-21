@@ -11,6 +11,7 @@
 import type { JevResult } from "./jev.ts";
 import {
   capTo,
+  barFor,
   ceilingAt,
   confidenceShareOf,
   MODEL_OF,
@@ -29,6 +30,7 @@ import {
   upgradeBar,
   withCeiling,
   withinWindow,
+  type Bars,
   type Ceiling,
   type Decision,
   type Tier,
@@ -525,6 +527,8 @@ export type Status = {
   planNote?: string | null;
   /** Where the catalog came from; absent on older callers. */
   catalog?: string;
+  /** Confidence bars set for particular decision models; absent or empty when there are none. */
+  bars?: Bars;
   /** What the model list found and the ladder took from it; absent on older callers. */
   models?: string;
 };
@@ -552,6 +556,8 @@ type Economics = {
  */
 type Hold = {
   sticky: number | null;
+  /** Bars for particular decision models, used instead of `sticky` for the model that answered. */
+  bars?: Bars;
   running: Decision | null;
   forced?: Tier | null;
   ceiling?: Ceiling;
@@ -582,6 +588,11 @@ export function attemptOf(
   offered: readonly Tier[],
   hold: Hold = { sticky: null, running: null },
 ): Attempt {
+  // The bar the answerer is held to: its own where one is set, else the session's.
+  if (hold.sticky !== null && hold.bars !== undefined && result.ok) {
+    const bar = barFor(hold.bars, result.via, result.model);
+    if (bar !== undefined && bar !== hold.sticky) hold = { ...hold, sticky: bar };
+  }
   const summary = notificationOf(text);
   const head =
     summary === null
@@ -1215,6 +1226,10 @@ export function statusReport(status: Status): string {
                 : "")
           : "off (/jev price on)"
       }`,
+    );
+  if (status.sticky !== null && status.bars !== undefined && Object.keys(status.bars).length > 0)
+    lines.push(
+      `  bars      ${Object.entries(status.bars).map(([k, v]) => `${plain(k)} ${pct(v)}`).join(", ")} (the bar above applies to any other)`,
     );
   lines.push(`  ceiling   ${ceilingLine(status.ceiling)}`);
   if (status.compactOn !== undefined)

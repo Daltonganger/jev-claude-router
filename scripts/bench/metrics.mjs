@@ -113,6 +113,37 @@ export function agreement(byModel) {
   return out;
 }
 
+/** Bars worth looking at, from a coin-flip to nearly sure. */
+export const BAR_STEPS = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95];
+
+/** For each bar: how many answers reach it, their share of all, and how often those are right. */
+export function barTable(rows) {
+  const answered = rows.filter((r) => TIERS.includes(r.label) && TIERS.includes(r.pick));
+  return BAR_STEPS.map((bar) => {
+    const above = answered.filter((r) => (r.confidence ?? 0) >= bar);
+    return {
+      bar,
+      n: above.length,
+      share: answered.length === 0 ? null : above.length / answered.length,
+      accuracy: above.length === 0 ? null : above.filter((r) => r.pick === r.label).length / above.length,
+    };
+  });
+}
+
+/**
+ * The lowest bar at which a model's confident answers are clearly better than its answers
+ * overall: at least `lift` more often right, over at least `minAnswers` answers. Null when no
+ * bar does, which says the model's confidence tells its right answers from its wrong ones
+ * no better than chance does on this data, and a bar on it filters nothing.
+ */
+export function suggestBar(rows, { minAnswers = 15, lift = 0.1 } = {}) {
+  const answered = rows.filter((r) => TIERS.includes(r.label) && TIERS.includes(r.pick));
+  if (answered.length === 0) return null;
+  const overall = answered.filter((r) => r.pick === r.label).length / answered.length;
+  const hit = barTable(rows).find((b) => b.n >= minAnswers && b.accuracy !== null && b.accuracy >= overall + lift);
+  return hit === undefined ? null : { ...hit, overall };
+}
+
 /** How many of each label there are, over the rows that carry a tier label. */
 export function labelCounts(rows) {
   const counts = Object.fromEntries(TIERS.map((t) => [t, 0]));

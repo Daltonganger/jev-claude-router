@@ -74,5 +74,6 @@
       "note": "billed at API rates"
     }
   },
-  "deciders": {}
+  "deciders": {},
+  "bars": {}
 }

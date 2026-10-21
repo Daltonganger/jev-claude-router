@@ -5846,3 +5846,71 @@ describe("register: OpenRouter's Decisions API (2026-10-21)", () => {
     assert.match(t.text, /Jev 97%/);
   });
 });
+
+describe("register: a bar for each decision model (2026-10-21)", () => {
+  const MS = { JEV_ROUTER_PROVIDER: "openrouter", OPENROUTER_API_KEY: "or-key", JEV_ROUTER_API: "decisions", JEV_ROUTER_JEV_MODEL: "microsoft/microsoft-decision-1", JEV_ROUTER_STICKY: "1" };
+  const started = async (over: Record<string, string | undefined> = {}, catalog?: unknown) => {
+    const kit = load({ ...MS, ...over });
+    if (catalog !== undefined) kit.setCatalog(catalog);
+    await kit.hooks.get("session.start")!(kit.$, {}, async (e: unknown) => e);
+    return kit;
+  };
+  type Kit = Awaited<ReturnType<typeof started>>;
+  const report = async (kit: Kit) => (await kit.hooks.get('command.run:{"command":"jev"}')!(kit.$, { args: "" })).text as string;
+  const jev = (kit: Kit, args: string) => kit.hooks.get('command.run:{"command":"jev"}')!(kit.$, { args });
+  async function turn(kit: Kit, id: string) {
+    await kit.hooks.get("turn.start")!(kit.$, { text: "implement it", turnId: id }, async (e: unknown) => e);
+    let sent: { model?: string } = {};
+    const chunks = await collect(
+      kit.hooks.get("turn.step")!(kit.$, { turnId: id, index: 0 }, (e: { model: string }) => {
+        sent = e;
+        return answeredBy(e.model ?? "claude-opus-5-5");
+      }),
+    );
+    return { sent, text: chunks.filter((c: { kind: string }) => c.kind === "text").map((c: { text: string }) => c.text).join("") };
+  }
+  // Sonnet first, then an answer for opus read from the probabilities as (4·0.7 − 1)/3 = 60%.
+  async function moveToOpus(kit: Kit) {
+    kit.setTier("sonnet", 0.95, 1, 0.9);
+    await turn(kit, "b1");
+    kit.setTier("opus", 0.7, 2, 0.9);
+    return turn(kit, "b2");
+  }
+  afterEach(() => setOverlay(null));
+
+  test("without a bar of its own the session's holds 60% under 75%", async () => {
+    const t = await moveToOpus(await started());
+    assert.equal(t.sent.model, "claude-sonnet-5-5");
+    assert.match(t.text, /kept sonnet: microsoft-decision-1 60% on opus, needs 75%/);
+  });
+
+  test("JEV_ROUTER_DECIDER_BARS gives that model its own, and /jev says so", async () => {
+    const kit = await started({ JEV_ROUTER_DECIDER_BARS: "microsoft-decision-1=0.5" });
+    const t = await moveToOpus(kit);
+    assert.equal(t.sent.model, "claude-opus-5-5");
+    assert.match(await report(kit), /bars\s+microsoft-decision-1 50% \(the bar above applies to any other\)/);
+  });
+
+  test("the catalog can set it for everyone, and a bar of your own for every decider keeps that out", async () => {
+    const catalog = { schema: 1, updated: "2026-10-21", models: {}, plans: {}, deciders: {}, bars: { "microsoft/microsoft-decision-1": 0.5 } };
+    const used = await started({ JEV_ROUTER_CATALOG: undefined }, catalog);
+    assert.equal((await moveToOpus(used)).sent.model, "claude-opus-5-5");
+    const yours = await started({ JEV_ROUTER_CATALOG: undefined, JEV_ROUTER_STICKY_CONFIDENCE: "0.8" }, catalog);
+    assert.equal((await moveToOpus(yours)).sent.model, "claude-sonnet-5-5", "you set a bar for all: the catalog's recommendation stays out");
+    const named = await started({ JEV_ROUTER_CATALOG: undefined, JEV_ROUTER_STICKY_CONFIDENCE: "0.8", JEV_ROUTER_DECIDER_BARS: "microsoft-decision-1=0.5" }, catalog);
+    assert.equal((await moveToOpus(named)).sent.model, "claude-opus-5-5", "a bar you name for the model is always yours");
+  });
+
+  test("/jev sticky is the person's word for every decider", async () => {
+    const kit = await started({ JEV_ROUTER_DECIDER_BARS: "microsoft-decision-1=0.5" });
+    await jev(kit, "sticky 0.9");
+    const t = await moveToOpus(kit);
+    assert.equal(t.sent.model, "claude-sonnet-5-5");
+    assert.doesNotMatch(await report(kit), /bars\s/);
+  });
+
+  test("with stickiness off there is no bar line", async () => {
+    const kit = await started({ JEV_ROUTER_DECIDER_BARS: "microsoft-decision-1=0.5", JEV_ROUTER_STICKY: "0" });
+    assert.doesNotMatch(await report(kit), /bars\s/);
+  });
+});

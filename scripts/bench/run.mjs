@@ -13,6 +13,9 @@
  *   laya:<model>               in --models: your own Laya server instead of OpenRouter, e.g. laya:multilingual.
  *                               The address is LAYA_BASE_URL (or --laya-url), the key LAYA_API_KEY (none if the
  *                               server asks for none). Its confidence is read from x_jev_confidence.
+ *   --laya-concurrency 1        how many prompts at once go to your Laya server (default 1: a server on a NAS
+ *                               that is asked four things at once answers each slower, and the table's
+ *                               latency would be the queue's, not the model's)
  *   --laya-catalog              list the models your Laya server offers (GET <laya>/v1/models) and exit
  *   --tiers haiku,sonnet,opus   the tiers the model may choose from (default all four). Use the tiers the
  *                               router really offers you: on Pro with fable off, leave fable out, or the
@@ -120,11 +123,11 @@ async function pool(items, size, fn) {
 }
 
 /** Runs every model over every case. Returns { rows: { model: row[] }, summaries, agreement }. */
-export async function run({ cases, models, base, api, key, layaBase, layaKey = "", concurrency = 4, confidence = "probabilities", offered = TIERS, fetchImpl }) {
+export async function run({ cases, models, base, api, key, layaBase, layaKey = "", concurrency = 4, layaConcurrency = 1, confidence = "probabilities", offered = TIERS, fetchImpl }) {
   const rows = {};
   for (const spec of models) {
     const { route, model } = specOf(spec);
-    rows[spec] = await pool(cases, concurrency, async (c) => {
+    rows[spec] = await pool(cases, route === "laya" ? layaConcurrency : concurrency, async (c) => {
       const r =
         route === "laya"
           ? await ask({ base: layaBase, api, key: layaKey, model, prompt: c.prompt, offered, route, fetchImpl })
@@ -213,7 +216,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (outside > 0) console.log(`${outside} labelled prompts carry a tier that is not offered (${TIERS.filter((t) => !offered.includes(t)).join(", ")}); no model can match them.`);
   const models = wanted;
   const mode = arg("confidence", "probabilities");
-  const result = await run({ cases, models, base, api: arg("api", "decisions"), key, layaBase: layaUrl.ok ? layaUrl.base : undefined, layaKey, concurrency: Number(arg("concurrency", "4")), confidence: mode, offered });
+  const result = await run({ cases, models, base, api: arg("api", "decisions"), key, layaBase: layaUrl.ok ? layaUrl.base : undefined, layaKey, concurrency: Number(arg("concurrency", "4")), layaConcurrency: Number(arg("laya-concurrency", "1")), confidence: mode, offered });
   console.log(`${cases.length} labelled prompts, ${models.length} models offered ${offered.join(", ")}, confidence read from ${mode === "router" ? "what the router reads" : "the probabilities"}\n`);
   console.log(table(result.summaries));
   for (const [model, rows] of Object.entries(result.rows)) {

@@ -406,8 +406,15 @@ goedkopere kandidaat. Volgende stap: een tweede, andere set prompts, en Laya.
 - Snelheid vanaf de Mac naar `jev.2631.eu`: gemiddeld 1,35 s (`multilingual`) tot 2,1 s, p95 1,9 s tot 3,3 s.
   Dat is boven de standaard-wachttijd van 1,5 s: de meeste beurten zouden ongerouteerd blijven, en met een
   langere wachttijd (`JEV_ROUTER_TIMEOUT_MS`, hoogstens 8000) duurt elke beurt 2 tot 3 s langer.
-Voorlopige conclusie: in deze opstelling is Laya geen alternatief voor Jev 1.14. Wat niet is uitgezocht:
-of de snelheid aan het netwerk of aan de NAS ligt, en hoe groot dat model is.
+Voorlopige conclusie: in deze opstelling is Laya geen alternatief voor Jev 1.14 voor wat de keuzes betreft.
+**De snelheid hierboven is niet betrouwbaar:** de run vroeg vier prompts tegelijk aan de NAS, en een enkele
+kleine vraag (twee opties, korte tekst) kostte vanaf de Mac 0,23 s totaal. Wat de gemeten 1,4 s tot 2,1 s
+bevat is dus deels wachtrij. De bench vraagt een Laya-server voortaan één prompt tegelijk
+(`--laya-concurrency`). Opnieuw meten met de echte vraag (vier tiers en de effortvraag) staat open.
+**`x_jev_confidence` stond op geen van de 79 antwoorden** (op het antwoordobject van de tier). Of de server
+dat veld niet stuurt (dan is de Laya-versie ouder dan de wijziging die het toevoegt) of het elders zet,
+is niet bekend zonder het ruwe antwoord. De router valt dan terug op de kansen, die dezelfde formule geven,
+dus het werkt, maar het is niet wat de server zou kunnen leveren.
 
 ## 6. Compaction
 

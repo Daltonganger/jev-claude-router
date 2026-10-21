@@ -371,6 +371,23 @@ describe("run, against a stand-in for the Decisions API", () => {
     }
   });
 
+  test("your Laya server is asked one prompt at a time, so its latency is its own", async () => {
+    let now = 0;
+    let peak = 0;
+    const slow = async () => {
+      now++;
+      peak = Math.max(peak, now);
+      await new Promise((r) => setTimeout(r, 5));
+      now--;
+      return new Response(JSON.stringify({ answers: { tier: { type: "choice", choice: "opus", probabilities: { haiku: 0.1, sonnet: 0.1, opus: 0.8 } }, effort: { type: "score", score: 1 } } }), { status: 200 });
+    };
+    await run({ cases, models: ["laya:multilingual"], layaBase: "http://x", base: "http://y", api: "decisions", key: "k", concurrency: 4, fetchImpl: slow as unknown as typeof fetch });
+    assert.equal(peak, 1);
+    peak = 0;
+    await run({ cases, models: ["laya:multilingual"], layaBase: "http://x", layaConcurrency: 3, base: "http://y", api: "decisions", key: "k", fetchImpl: slow as unknown as typeof fetch });
+    assert.ok(peak > 1);
+  });
+
   test("it says when the Jev-scale number is missing from a Laya answer", async () => {
     const s = await standIn();
     try {

@@ -1,6 +1,6 @@
 {
   "name": "jev-claude-router",
-  "owner": { "name": "Ruben Beuker" },
+  "owner": { "name": "Daltonganger" },
   "plugins": [
     {
       "name": "jev-claude-router",

@@ -23,6 +23,9 @@ import {
   MODEL_OF,
   offeredTiers,
   parseOverride,
+  PLAN_EXCLUDES,
+  planExclusions,
+  planOf,
   stickyDecision,
   stickyOf,
   SUBAGENT_CONFIDENCE,
@@ -979,5 +982,32 @@ describe("ownWords is linear on unclosed openings (2026-09-29)", () => {
     }
     assert.equal(ownWords("a <pasted_content id=1>use opus</pasted_content> b").includes("opus"), false);
     assert.equal(ownWords("a <pasted_contents>use opus").includes("opus"), true);
+  });
+});
+
+describe("plans", () => {
+  test("JEV_ROUTER_PLAN is read lowercase, and blank is no plan", () => {
+    assert.equal(planOf(undefined), null);
+    assert.equal(planOf("  "), null);
+    assert.equal(planOf(" Pro "), "pro");
+  });
+
+  test("the built-in table: pro leaves out fable, max and api leave out nothing", () => {
+    assert.deepEqual(planExclusions("pro"), ["fable"]);
+    assert.deepEqual(planExclusions("max"), []);
+    assert.deepEqual(planExclusions("api"), []);
+    assert.deepEqual(Object.keys(PLAN_EXCLUDES).sort(), ["api", "max", "pro"]);
+  });
+
+  test("no plan, or one nobody knows, leaves nothing out", () => {
+    assert.deepEqual(planExclusions(null), []);
+    assert.deepEqual(planExclusions("team"), []);
+  });
+
+  test("the catalog's lines replace the built-in ones, and only ladder tiers count", () => {
+    assert.deepEqual(planExclusions("pro", []), []);
+    assert.deepEqual(planExclusions("pro", ["fable", "opus"]), ["opus", "fable"]);
+    assert.deepEqual(planExclusions("pro", ["mythos", "Fable"]), []);
+    assert.deepEqual(planExclusions("team", ["fable"]), ["fable"]);
   });
 });

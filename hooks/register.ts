@@ -25,6 +25,8 @@ import {
   upgradeMaxOf,
   offeredTiers,
   overrideAllowedOf,
+  planExclusions,
+  planOf,
   parseOverride,
   sessionDecision,
   stickyOf,
@@ -38,7 +40,18 @@ import {
   type Effort,
   type Tier,
 } from "./policy.ts";
-import { tierOfModel, baseModel, sameModelAs, ttlOf, usageCost, type Ttl } from "./pricing.ts";
+import { tierOfModel, baseModel, sameModelAs, setOverlay, ttlOf, usageCost, type Ttl } from "./pricing.ts";
+import {
+  catalogLine,
+  catalogOnOf,
+  catalogTtlOf,
+  catalogUrlOf,
+  loadCatalog,
+  overlayOf,
+  type Catalog,
+  type CatalogStore,
+  type LoadResult,
+} from "./catalog.ts";
 import {
   pack,
   SNAPSHOT_PREFIX,
@@ -100,6 +113,7 @@ type Engine = {
     fetch: (url: string, init?: HttpInitLike) => Promise<HttpResponseLike>;
   };
   clock: { sleep: (ms: number, options?: { signal?: AbortSignal }) => Promise<unknown> };
+  store: CatalogStore;
 };
 
 /** The stamp of the copy that holds a session, from its owner record, or null. */
@@ -321,7 +335,63 @@ type Settings = {
   compactOn: boolean;
   compactTimeoutMs: number;
   compactMinReduction: number;
+  /** `JEV_ROUTER_PLAN`: pro, max, api, or whatever was set; null when unset. */
+  plan: string | null;
+  /** The tiers the plan leaves out; already part of `excluded` at the start of the session. */
+  planExcluded: readonly Tier[];
+  /** The catalog: what has come in so far, and whether it is still on its way. */
+  catalog: { result: LoadResult | null; loading: boolean };
 };
+
+/**
+ * How long a session start waits for the catalog. A saved copy in date answers
+ * at once; a fetch that takes longer carries on in the background, is saved
+ * for the next session, and applies when it lands. Never a turn waiting on it.
+ */
+export const CATALOG_WAIT_MS = 800;
+
+/**
+ * Starts the catalog load and waits for it at most `CATALOG_WAIT_MS`. Top
+ * level, like `seedSettings`, because it takes `$`. Applies the catalog to
+ * the pricing functions as soon as it is in, whenever that is.
+ */
+async function startCatalog(
+  $: Engine,
+  state: Settings["catalog"],
+  raw: { off: string | undefined; url: string | undefined; allowCustom: string | undefined; ttl: string | undefined },
+): Promise<Catalog | null> {
+  if (!catalogOnOf(raw.off)) return null;
+  const url = catalogUrlOf(raw.url, raw.allowCustom);
+  if (!url.ok) {
+    state.result = { catalog: null, source: "none", notes: [url.reason] };
+    return null;
+  }
+  state.loading = true;
+  const loading = loadCatalog({
+    fetch: (u, init) => $.http.fetch(u, init),
+    sleep: (ms, options) => $.clock.sleep(ms, options),
+    store: $.store,
+    url: url.url,
+    ttlMs: catalogTtlOf(raw.ttl),
+  })
+    .catch((): LoadResult => ({ catalog: null, source: "none", notes: ["catalog: failed to load"] }))
+    .then((result) => {
+      state.result = result;
+      state.loading = false;
+      if (result.catalog !== null) setOverlay(overlayOf(result.catalog));
+      return result;
+    });
+  const timer = new AbortController();
+  const waited = await Promise.race([
+    loading,
+    Promise.resolve($.clock.sleep(CATALOG_WAIT_MS, { signal: timer.signal })).then(
+      () => null,
+      () => new Promise<never>(() => {}),
+    ),
+  ]);
+  timer.abort();
+  return waited?.catalog ?? null;
+}
 
 /**
  * Reads the settings from the environment on first use. A top-level
@@ -338,7 +408,18 @@ async function seedSettings(
   // Normalized together: JEV_ROUTER_EXCLUDE naming every tier falls back to
   // the full ladder in `offered`, and `excluded` must agree with that or
   // `/jev` can end up saying a tier is both offered and excluded.
-  const tiers = tierFilter(excludedTiers(await $.env.get("JEV_ROUTER_EXCLUDE")));
+  const catalogState: Settings["catalog"] = { result: null, loading: false };
+  const catalog = await startCatalog($, catalogState, {
+    off: await $.env.get("JEV_ROUTER_CATALOG"),
+    url: await $.env.get("JEV_ROUTER_CATALOG_URL"),
+    allowCustom: await $.env.get("JEV_ROUTER_ALLOW_CUSTOM_CATALOG"),
+    ttl: await $.env.get("JEV_ROUTER_CATALOG_TTL_HOURS"),
+  });
+  const plan = planOf(await $.env.get("JEV_ROUTER_PLAN"));
+  const planExcluded = planExclusions(plan, plan === null ? undefined : catalog?.plans[plan]?.excludeLines);
+  const tiers = tierFilter(
+    new Set([...excludedTiers(await $.env.get("JEV_ROUTER_EXCLUDE")), ...planExcluded]),
+  );
   return {
     provider: providerOf({
       TYPESAFE_API_KEY: await $.env.get("TYPESAFE_API_KEY"),
@@ -373,6 +454,9 @@ async function seedSettings(
     compactMinReduction: minReductionOf(
       await $.env.get("JEV_ROUTER_COMPACT_MIN_REDUCTION"),
     ),
+    plan,
+    planExcluded,
+    catalog: catalogState,
   };
 }
 
@@ -1613,6 +1697,9 @@ export function register(on: On) {
         announce,
         attempts,
         spent,
+        plan: settings.plan,
+        planExcluded: settings.planExcluded,
+        catalog: catalogLine(settings.catalog.result, settings.catalog.loading),
       }),
     };
   });

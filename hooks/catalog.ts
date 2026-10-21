@@ -15,7 +15,8 @@
  */
 
 import type { HttpInitLike, HttpResponseLike } from "./jev.ts";
-import { priceAt, type Price, type PriceTier } from "./pricing.ts";
+import { MODEL_OF, TIERS } from "./policy.ts";
+import { priceAt, type Overlay, type Price, type PriceTier } from "./pricing.ts";
 
 /** The format this module reads. A file that says a higher number is ignored. */
 export const CATALOG_SCHEMA = 1;
@@ -429,4 +430,35 @@ export async function loadCatalog(args: LoadArgs): Promise<LoadResult> {
     if (jumps.length > 0) notes.push(`catalog: price moved more than ${PRICE_JUMP_FACTOR}× for ${jumps.join(", ")}`);
   }
   return { catalog: parsed.catalog, source: "fresh", notes };
+}
+
+/** What the pricing functions read from a catalog: prices by id, and each tier's model. */
+export function overlayOf(catalog: Catalog): Overlay {
+  const models = new Map<string, Price>();
+  for (const [id, model] of Object.entries(catalog.models))
+    if (model.price !== undefined) models.set(id.toLowerCase(), pricedModel(model));
+  const ladder: Overlay["ladder"] = {};
+  const windows: Overlay["windows"] = {};
+  for (const tier of TIERS) {
+    const model = catalog.models[MODEL_OF[tier]];
+    if (model?.price !== undefined) ladder[tier] = pricedModel(model);
+    if (model?.maxInputTokens !== undefined) windows[tier] = model.maxInputTokens;
+  }
+  return { models, ladder, windows };
+}
+
+/** One line for `/jev`: where the catalog came from, and how old its data is. */
+export function catalogLine(result: LoadResult | null, loading: boolean): string {
+  if (result === null) return loading ? "loading (the built-in tables answer until it is in)" : "not loaded";
+  const how =
+    result.source === "fresh"
+      ? "fetched"
+      : result.source === "cache"
+        ? "saved copy"
+        : result.source === "stale"
+          ? "saved copy, the fetch failed"
+          : "none, the built-in tables answer";
+  const on = result.catalog === null ? "" : result.catalog.updated === "" ? "" : ` · data from ${result.catalog.updated}`;
+  const notes = result.notes.length > 0 ? ` · ${result.notes.map((n) => n.replace(/^catalog: /, "")).join("; ")}` : "";
+  return `${how}${on}${notes}`;
 }

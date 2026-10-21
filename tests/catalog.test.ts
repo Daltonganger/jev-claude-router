@@ -17,7 +17,9 @@ import {
   catalogTtlOf,
   catalogUrlOf,
   excludedLinesOf,
+  catalogLine,
   loadCatalog,
+  overlayOf,
   parseCatalog,
   priceForPrompt,
   priceJumps,
@@ -364,5 +366,48 @@ describe("catalog.json in the repo", () => {
   it("has a plan for each of pro, max and api", () => {
     assert.deepStrictEqual(Object.keys(catalog.plans).sort(), ["api", "max", "pro"]);
     assert.deepStrictEqual(catalog.plans.max?.excludeLines, []);
+  });
+});
+
+describe("overlayOf", () => {
+  const c = parsed({
+    ...file(),
+    models: {
+      "claude-haiku-5-5": {
+        line: "haiku",
+        maxInputTokens: 500_000,
+        price: P,
+        priceTiers: [{ abovePromptTokens: 100_000, ...P, input: 9 }],
+      },
+      "Claude-Other-1": { line: "opus", price: P },
+      "claude-nothing": { line: "opus" },
+    },
+  });
+
+  it("maps priced models by lowercase id, and each tier's model to the tier", () => {
+    const o = overlayOf(c);
+    assert.deepStrictEqual([...o.models.keys()].sort(), ["claude-haiku-5-5", "claude-other-1"]);
+    assert.strictEqual(o.models.get("claude-haiku-5-5")?.tiers?.[0]?.price.input, 9);
+    assert.strictEqual(o.ladder.haiku?.tiers?.length, 1);
+    assert.strictEqual(o.windows.haiku, 500_000);
+    assert.strictEqual(o.ladder.opus, undefined, "opus's own model is not in this file");
+  });
+});
+
+describe("catalogLine", () => {
+  const c = parsed(file());
+  it("says where the copy came from and how old the data is", () => {
+    assert.strictEqual(catalogLine({ catalog: c, source: "fresh", notes: [] }, false), "fetched · data from 2026-10-20");
+    assert.strictEqual(catalogLine({ catalog: c, source: "cache", notes: [] }, false), "saved copy · data from 2026-10-20");
+    assert.strictEqual(
+      catalogLine({ catalog: c, source: "stale", notes: ["catalog: HTTP 503"] }, false),
+      "saved copy, the fetch failed · data from 2026-10-20 · HTTP 503",
+    );
+    assert.strictEqual(
+      catalogLine({ catalog: null, source: "none", notes: ["catalog: timed out after 3000ms"] }, false),
+      "none, the built-in tables answer · timed out after 3000ms",
+    );
+    assert.strictEqual(catalogLine(null, true), "loading (the built-in tables answer until it is in)");
+    assert.strictEqual(catalogLine(null, false), "not loaded");
   });
 });

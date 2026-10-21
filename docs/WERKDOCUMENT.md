@@ -1,6 +1,6 @@
 # Werkdocument: JEV-router voor Claude Code
 
-Status: stap 1 gebouwd (zie Volgorde), de rest is plan. Laatst bijgewerkt: 2026-10-20.
+Status: stap 1 en 2 gebouwd (zie Volgorde), de rest is plan. Laatst bijgewerkt: 2026-10-20.
 
 Dit document is de lijst van wat we gaan doen, in welke volgorde, en wat we nog
 moeten uitzoeken. Wat hier "gemeten" of "bevestigd" heet, is dat ook; de rest staat
@@ -278,7 +278,11 @@ typedefinities komen van een vaste commit (`npm run types`); controleren of die 
    tabellen) en `tests/catalog.test.ts`. De lader is nog niet aangesloten op
    `register.ts`: dat gebeurt in stap 2, waar de gegevens ook gebruikt worden. Een test
    zorgt dat `catalog.json` en de ingebouwde tabellen niet uit elkaar lopen.
-2. Haiku 5.5 en prijstrappen; `JEV_ROUTER_PLAN` met Fable uit voor Pro.
+2. Haiku 5.5 en prijstrappen; `JEV_ROUTER_PLAN` met Fable uit voor Pro; de lader
+   aangesloten op `register.ts`. **Gedaan.** Prijzen komen van
+   platform.claude.com/docs/en/about-claude/pricing (2026-10-21). Daarbij bleek Sonnet 5.5
+   zijn cache te lezen voor $0,10, niet $0,20 (voetnoot 2 op die pagina); dat is gecorrigeerd.
+   Nog open: of een effort-wijziging op Haiku 5.5 de cache kost (op 4.5 niet; niet gemeten).
 3. Sync uit `/v1/models` (modellen, windows, effort).
 4. Provider-laag: eigen host-allowlist, Laya, OpenRouter (5.4), `x_jev_confidence`.
 5. Meetset en benchmark; pas daarna Perplexity en drempels per beslismodel.

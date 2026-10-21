@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { sameModelAs, WINDOW_TOKENS } from "../hooks/pricing.ts";
-import { describe, test } from "node:test";
+import { ladderPrice, priceOfModel, sameModelAs, setOverlay, WINDOW_TOKENS } from "../hooks/pricing.ts";
+import { afterEach, describe, test } from "node:test";
 
-import { register } from "../hooks/register.ts";
+import { CATALOG_WAIT_MS, register } from "../hooks/register.ts";
 
 // These suites exercise the window guard (a turn too long for a tier is moved
 // up, or held where it is), which needs a tier with a smaller window than the
@@ -41,19 +41,35 @@ function load(
   let contextTokens: number | null = 1_000;
   let agentStatus = "completed";
   let sessionModel = "claude-opus-5-5";
+  /** What the catalog URL answers: a body, "down" for an error, "hang" for no answer. */
+  let catalogReply: unknown = "down";
+  let catalogFetches = 0;
 
   // Most register tests assume sticky off; production defaults sticky on.
   // Pass `JEV_ROUTER_STICKY: undefined` to exercise the real default.
   const merged: Record<string, string | undefined> = {
     JEV_ROUTER_STICKY: "0",
+    // The catalog would use the fake fetch below, which answers Jev.
+    JEV_ROUTER_CATALOG: "0",
     ...env,
   };
 
   const $ = {
     env: { get: async (k: string) => merged[k] },
-    clock: { sleep: () => new Promise<never>(() => {}) },
+    // Time passes only for the catalog wait, and only when the catalog is hanging.
+    clock: { sleep: (ms?: number) => (ms === CATALOG_WAIT_MS && catalogReply === "hang" ? Promise.resolve() : new Promise<never>(() => {})) },
     http: {
-      fetch: async (_url: string, init?: { body?: string }) => {
+      fetch: async (url: string, init?: { body?: string }) => {
+        if (url.includes("raw.githubusercontent.com")) {
+          catalogFetches++;
+          if (catalogReply === "hang") return new Promise<never>(() => {});
+          return {
+            ok: catalogReply !== "down",
+            status: catalogReply === "down" ? 503 : 200,
+            headers: {},
+            text: JSON.stringify(catalogReply),
+          };
+        }
         fetches++;
         lastState = init?.body ? JSON.parse(init.body).state : undefined;
         const good = ok;
@@ -134,6 +150,11 @@ function load(
     setAgentStatus: (status: string) => {
       agentStatus = status;
     },
+    /** What the catalog URL answers from now on, and how often it was asked. */
+    setCatalog: (reply: unknown) => {
+      catalogReply = reply;
+    },
+    catalogFetches: () => catalogFetches,
     /** What `$.session.model()` returns. */
     setSessionModel: (model: string) => {
       sessionModel = model;
@@ -5333,5 +5354,125 @@ describe("register: a tier's own alias stands for its model (2026-09-29)", () =>
     const t = await stepOn(kit, "vx1", "plan it", "claude-opus-5-5@20260901");
     assert.equal(t.sent, "claude-opus-5-5@20260901");
     assert.doesNotMatch(t.line, /kept claude/);
+  });
+});
+
+describe("register: plan and catalog (2026-10-21)", () => {
+  const started = async (over: Record<string, string | undefined> = {}, reply?: unknown, shared?: { store: Map<string, unknown>; id: string }) => {
+    const kit = load({ AI_GATEWAY_API_KEY: "gw-key", ...over }, shared);
+    if (reply !== undefined) kit.setCatalog(reply);
+    await kit.hooks.get("session.start")!(kit.$, {}, async (e: unknown) => e);
+    return kit;
+  };
+  const report = async (kit: Awaited<ReturnType<typeof started>>) =>
+    (await kit.hooks.get('command.run:{"command":"jev"}')!(kit.$, { args: "" })).text as string;
+  // The catalog is applied to the pricing functions for the whole process.
+  const reset = () => setOverlay(null);
+  afterEach(reset);
+
+  const file = (over: Record<string, unknown> = {}) => ({
+    schema: 1,
+    updated: "2026-10-21",
+    models: {},
+    plans: { pro: { excludeLines: ["fable"] }, max: { excludeLines: [] }, api: { excludeLines: [] } },
+    deciders: {},
+    ...over,
+  });
+
+  test("no plan set: every tier is offered, and the report says how to set one", async () => {
+    const kit = await started();
+    const r = await report(kit);
+    assert.match(r, /plan\s+not set \(JEV_ROUTER_PLAN=pro\|max\|api\)/);
+    assert.match(r, /tiers\s+haiku, sonnet, opus, fable/);
+  });
+
+  test("pro leaves out fable: Jev is not offered it, and the report says why", async () => {
+    const kit = await started({ JEV_ROUTER_PLAN: "pro" });
+    const r = await report(kit);
+    assert.match(r, /plan\s+pro, does not cover fable/);
+    assert.match(r, /tiers\s+haiku, sonnet, opus\n/);
+    assert.match(r, /excluded\s+fable/);
+  });
+
+  test("max and api cover every tier, and a plan nobody knows leaves nothing out", async () => {
+    for (const plan of ["max", "API", " Max "]) {
+      const r = await report(await started({ JEV_ROUTER_PLAN: plan }));
+      assert.match(r, /every tier covered/, plan);
+      assert.match(r, /tiers\s+haiku, sonnet, opus, fable/);
+    }
+    const odd = await report(await started({ JEV_ROUTER_PLAN: "team" }));
+    assert.match(odd, /plan\s+team, every tier covered/);
+  });
+
+  test("the plan and JEV_ROUTER_EXCLUDE add up, and /jev tiers can still bring a tier back", async () => {
+    const kit = await started({ JEV_ROUTER_PLAN: "pro", JEV_ROUTER_EXCLUDE: "haiku" });
+    assert.match(await report(kit), /tiers\s+sonnet, opus\n/);
+    await kit.hooks.get('command.run:{"command":"jev"}')!(kit.$, { args: "tiers on fable" });
+    assert.match(await report(kit), /tiers\s+sonnet, opus, fable/);
+  });
+
+  test("the catalog's word on a plan beats the built-in table", async () => {
+    const kit = await started({ JEV_ROUTER_PLAN: "pro", JEV_ROUTER_CATALOG: undefined }, file({ plans: { pro: { excludeLines: [] } } }));
+    const r = await report(kit);
+    assert.match(r, /plan\s+pro, every tier covered/);
+    assert.match(r, /catalog\s+fetched · data from 2026-10-21/);
+    assert.equal(kit.catalogFetches(), 1);
+  });
+
+  test("a catalog line the ladder does not have (mythos) excludes nothing", async () => {
+    const kit = await started({ JEV_ROUTER_PLAN: "pro", JEV_ROUTER_CATALOG: undefined }, file({ plans: { pro: { excludeLines: ["mythos"] } } }));
+    assert.match(await report(kit), /plan\s+pro, every tier covered/);
+  });
+
+  test("the catalog's prices reach the cost line", async () => {
+    const kit = await started(
+      { JEV_ROUTER_CATALOG: undefined },
+      file({
+        models: {
+          "claude-opus-5-5": {
+            line: "opus",
+            price: { input: 40, write5m: 50, write1h: 80, read: 2, output: 200 },
+          },
+        },
+      }),
+    );
+    assert.match(await report(kit), /catalog\s+fetched/);
+    assert.equal(priceOfModel("claude-opus-5-5")?.output, 200);
+    assert.equal(ladderPrice("opus").input, 40);
+  });
+
+  test("a catalog that cannot be fetched leaves the built-in tables and says so", async () => {
+    const kit = await started({ JEV_ROUTER_CATALOG: undefined }, "down");
+    assert.match(await report(kit), /catalog\s+none, the built-in tables answer · HTTP 503/);
+    assert.equal(priceOfModel("claude-opus-5-5")?.output, 20);
+  });
+
+  test("a catalog still on its way does not hold the session up", async () => {
+    const kit = await started({ JEV_ROUTER_CATALOG: undefined }, "hang");
+    assert.match(await report(kit), /catalog\s+loading \(the built-in tables answer until it is in\)/);
+    assert.equal(kit.catalogFetches(), 1);
+    // The session is up and routing meanwhile.
+    kit.setTier("opus", 0.95, 2);
+    assert.equal((await kit.hooks.get("turn.start")!(kit.$, { text: "implement it", turnId: "h1" }, async (e: unknown) => e)) !== undefined, true);
+  });
+
+  test("a saved copy in date is used without a second request", async () => {
+    const shared = { store: new Map<string, unknown>(), id: "sess-cat" };
+    await started({ JEV_ROUTER_CATALOG: undefined }, file(), shared);
+    const second = await started({ JEV_ROUTER_CATALOG: undefined }, "down", shared);
+    assert.equal(second.catalogFetches(), 0);
+    assert.match(await report(second), /catalog\s+saved copy · data from 2026-10-21/);
+  });
+
+  test("JEV_ROUTER_CATALOG=0 makes no request and shows no catalog line", async () => {
+    const kit = await started({ JEV_ROUTER_CATALOG: "0" }, file());
+    assert.equal(kit.catalogFetches(), 0);
+    assert.match(await report(kit), /catalog\s+not loaded/);
+  });
+
+  test("a catalog URL off GitHub is refused unless allowed, and no request goes out", async () => {
+    const kit = await started({ JEV_ROUTER_CATALOG: undefined, JEV_ROUTER_CATALOG_URL: "https://example.com/c.json" }, file());
+    assert.equal(kit.catalogFetches(), 0);
+    assert.match(await report(kit), /not allowlisted/);
   });
 });

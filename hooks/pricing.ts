@@ -44,6 +44,28 @@ export function priceAt(price: Price, promptTokens: number): Price {
 
 export type Ttl = "5m" | "1h";
 
+/**
+ * What the catalog says in place of the built-in tables: price by model id,
+ * and the price and window of each tier's model. Set once the catalog is in;
+ * absent, everything below answers from the tables in this file.
+ */
+export type Overlay = {
+  models: ReadonlyMap<string, Price>;
+  ladder: Partial<Record<Tier, Price>>;
+  windows: Partial<Record<Tier, number>>;
+};
+
+let overlay: Overlay | null = null;
+
+export function setOverlay(next: Overlay | null): void {
+  overlay = next;
+}
+
+/** The price of the model a tier runs: the catalog's when it has one, else the built-in. */
+export function ladderPrice(tier: Tier): Price {
+  return overlay?.ladder[tier] ?? PRICE[tier];
+}
+
 /** The ladder's models. */
 export const PRICE: Record<Tier, Price> = {
   haiku: {
@@ -114,6 +136,9 @@ export function priceOfModel(model: string): Price | null {
     .replace(/@\d{8}$/, "");
   // Bare, it is Opus 4.0 (Vertex's `claude-opus-4@date` comes to this).
   if (id === "claude-opus-4") return OPUS_4_0;
+  // The catalog names a model by its id; a dated spelling is the same model.
+  const listed = overlay?.models.get(id) ?? overlay?.models.get(id.replace(/-\d{8}$/, ""));
+  if (listed !== undefined) return listed;
   for (const [prefix, price] of OTHER_PRICE)
     if (id.startsWith(prefix)) return price;
   return null;
@@ -189,7 +214,12 @@ const WINDOW_HEADROOM_TOKENS = 16_000;
 
 /** True when a turn carrying `contextTokens` can be sent to `tier` at all. */
 export function fitsWindow(tier: Tier, contextTokens: number): boolean {
-  return contextTokens + WINDOW_HEADROOM_TOKENS <= WINDOW_TOKENS[tier];
+  return contextTokens + WINDOW_HEADROOM_TOKENS <= windowOf(tier);
+}
+
+/** A tier's window: the catalog's when it has one, else the built-in. */
+export function windowOf(tier: Tier): number {
+  return overlay?.windows[tier] ?? WINDOW_TOKENS[tier];
 }
 
 /** `claude-opus-5-5[1m]` and `claude-opus-5-5` are one model: the suffix is the engine's. */
@@ -266,7 +296,7 @@ export function switchVerdict(
    * tier: a session on `claude-opus-5` reads its cache at $0.50, not the
    * $0.20 of the opus tier's `claude-opus-5-5`.
    */
-  fromPrice: Price = PRICE[from],
+  fromPrice: Price = ladderPrice(from),
   /** The running model's cache has expired: staying writes it too. */
   fromCold = false,
 ): SwitchVerdict {
@@ -275,7 +305,7 @@ export function switchVerdict(
   const out = outputTokens / 1e6;
   // The next request's prompt is the whole context, whichever tier it goes to.
   const from_ = priceAt(fromPrice, contextTokens);
-  const to_ = priceAt(PRICE[to], contextTokens);
+  const to_ = priceAt(ladderPrice(to), contextTokens);
   const stay = ctx * (fromCold ? write(from_) : from_.read) + out * from_.output;
   const go = ctx * write(to_) + out * to_.output + ctx * write(from_);
   return { stay, go, hold: go >= stay };
@@ -295,7 +325,7 @@ export function upgradeVerdict(
   outputTokens: number,
   limit: number,
   ttl: Ttl = "1h",
-  fromPrice: Price = PRICE[from],
+  fromPrice: Price = ladderPrice(from),
   /** The running model's cache has expired: staying writes it too. */
   fromCold = false,
 ): SwitchVerdict {
@@ -303,7 +333,7 @@ export function upgradeVerdict(
   const ctx = contextTokens / 1e6;
   const out = outputTokens / 1e6;
   const from_ = priceAt(fromPrice, contextTokens);
-  const to_ = priceAt(PRICE[to], contextTokens);
+  const to_ = priceAt(ladderPrice(to), contextTokens);
   const stay = ctx * (fromCold ? write(from_) : from_.read) + out * from_.output;
   const go = ctx * write(to_) + out * to_.output;
   return { stay, go, hold: go - stay > limit, limit };
@@ -320,7 +350,7 @@ export function breakEvenTokens(
   outputTokens: number,
   ttl: Ttl = "1h",
   /** The running model's own price, as in `switchVerdict`. */
-  fromPrice: Price = PRICE[from],
+  fromPrice: Price = ladderPrice(from),
   /** The running model's cache has expired, as in `switchVerdict`. */
   fromCold = false,
 ): number {
@@ -331,14 +361,14 @@ export function breakEvenTokens(
   // A tiered price changes with the context, so the line is solved region by
   // region between the tiers' thresholds, and the largest context that pays wins.
   const edges = [
-    ...new Set([0, ...(fromPrice.tiers ?? []).map((t) => t.abovePromptTokens), ...(PRICE[to].tiers ?? []).map((t) => t.abovePromptTokens)]),
+    ...new Set([0, ...(fromPrice.tiers ?? []).map((t) => t.abovePromptTokens), ...(ladderPrice(to).tiers ?? []).map((t) => t.abovePromptTokens)]),
   ].sort((x, y) => x - y);
   let best = 0;
   edges.forEach((lo, i) => {
     const hi = edges[i + 1] ?? Infinity;
     // Prices that apply from just past `lo` (a tier starts above its threshold).
     const f = priceAt(fromPrice, lo + 1);
-    const t = priceAt(PRICE[to], lo + 1);
+    const t = priceAt(ladderPrice(to), lo + 1);
     const perCtx = write(t) + write(f) - (fromCold ? write(f) : f.read);
     const perOut = f.output - t.output;
     if (perOut <= 0 || perCtx <= 0) return;

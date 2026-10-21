@@ -194,6 +194,8 @@ jev-claude-router:
   cache     1h writes · 201k context · fable→haiku pays below 3k
   tiers     haiku, sonnet, opus, fable
   announce  on, a line per turn
+  plan      max, every tier covered
+  catalog   fetched · data from 2026-10-21
   spent     $4.12 this session
 
   Recent turns, newest first:
@@ -451,8 +453,25 @@ All settings go in the `env` block of `~/.claude/settings.json`.
 | `JEV_ROUTER_CACHE_TTL` | `1h` | Cache lifetime used for pricing: `1h` (what Claude Code writes) or `5m`. |
 | `JEV_ROUTER_CEILING` | `xhigh` | Effort ceiling: an effort for all tiers, or per tier, e.g. `fable:medium,opus:high`. |
 | `JEV_ROUTER_EXCLUDE` | | Tiers not offered to Jev at session start, e.g. `fable,haiku` (commas, semicolons or spaces); `/jev tiers` toggles this per session. |
+| `JEV_ROUTER_PLAN` | | `pro`, `max` or `api`: the tiers the plan does not cover are not offered, on top of `JEV_ROUTER_EXCLUDE`. Pro leaves out `fable` (an assumption, corrected in `catalog.json`); max and api leave out nothing. Unset offers every tier. `/jev tiers on fable` brings one back for a session. |
 | `JEV_ROUTER_ALLOW_OVERRIDE` | on | `0` ignores tiers named in prompts. |
 | `JEV_ROUTER_NOTIFY_CONTINUE` | on | `0` asks Jev about finished-task turns. |
+
+**Catalog**
+
+Prices, windows and what each plan covers are kept in `catalog.json` in this
+repo, fetched at session start and saved, so a change there reaches every
+install without a new release. The built-in tables answer for anything the
+catalog does not list, or when it cannot be fetched. A session start waits at
+most 0.8 s for it; a slower fetch finishes in the background and is used from
+the next session. A price that moved more than 4× between two copies is
+reported in `/jev`.
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `JEV_ROUTER_CATALOG` | on | `0` makes no request and uses the built-in tables. |
+| `JEV_ROUTER_CATALOG_URL` | this repo's `catalog.json` | Another catalog, e.g. your fork's. https only, and only from `raw.githubusercontent.com` unless `JEV_ROUTER_ALLOW_CUSTOM_CATALOG=1`. |
+| `JEV_ROUTER_CATALOG_TTL_HOURS` | `6` | How long a saved copy is used before fetching again. |
 
 **Compaction**
 

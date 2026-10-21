@@ -174,6 +174,34 @@ export function excludedTiers(raw: string | undefined): Set<Tier> {
   );
 }
 
+/**
+ * What each plan leaves out when the catalog has no word on it. Pro leaves
+ * out Fable: that is the user's assumption, not something read from Anthropic,
+ * and `catalog.json` is where it is corrected for every install.
+ */
+export const PLAN_EXCLUDES: Record<string, readonly Tier[]> = {
+  pro: ["fable"],
+  max: [],
+  api: [],
+};
+
+/** `JEV_ROUTER_PLAN`, lowercased, or null when unset or blank. */
+export function planOf(raw: string | undefined): string | null {
+  const plan = (raw ?? "").trim().toLowerCase();
+  return plan === "" ? null : plan;
+}
+
+/**
+ * The tiers a plan does not cover. The catalog's lines for the plan when it
+ * has the plan, else the built-in table; a plan neither knows leaves nothing
+ * out. Lines that are not a tier on the ladder (`mythos`) are no tier here.
+ */
+export function planExclusions(plan: string | null, catalogLines?: readonly string[]): Tier[] {
+  if (plan === null) return [];
+  const lines = catalogLines ?? PLAN_EXCLUDES[plan] ?? [];
+  return TIERS.filter((t) => lines.includes(t));
+}
+
 /** The tiers offered to Jev, in ladder order, never empty. */
 export function offeredTiers(excluded: Set<Tier>): Tier[] {
   const kept = TIERS.filter((t) => !excluded.has(t));

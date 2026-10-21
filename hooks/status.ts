@@ -37,14 +37,13 @@ import { sameModelAs,
   baseModel,
   breakEvenTokens,
   isDowngrade,
-  PRICE,
+  ladderPrice,
   upgradeVerdict,
   priceOfModel,
   switchVerdict,
   usageCost,
   usd,
   fitsWindow,
-  WINDOW_TOKENS,
   type Ttl,
 } from "./pricing.ts";
 import type { ProviderResult } from "./provider.ts";
@@ -507,6 +506,11 @@ export type Status = {
   attempts: readonly Attempt[];
   /** Dollars across every turn the router saw this session, at list price. */
   spent: number;
+  /** `JEV_ROUTER_PLAN` and the tiers it leaves out; absent on older callers. */
+  plan?: string | null;
+  planExcluded?: readonly Tier[];
+  /** Where the catalog came from; absent on older callers. */
+  catalog?: string;
 };
 
 /**
@@ -707,7 +711,7 @@ export function attemptOf(
       running.tier === decision.tier &&
       running.model !== decision.model;
     const fromPrice =
-      running !== null ? (priceOfModel(running.model) ?? PRICE[running.tier]) : null;
+      running !== null ? (priceOfModel(running.model) ?? ladderPrice(running.tier)) : null;
     const upgrade =
       running !== null && !downgrade && !lateral && running.tier !== decision.tier;
     const verdict =
@@ -1215,6 +1219,19 @@ export function statusReport(status: Status): string {
   if (notOffered.length > 0) {
     lines.push(`  excluded  ${notOffered.join(", ")}`);
   }
+  if (status.plan !== undefined)
+    lines.push(
+      `  plan      ${
+        status.plan === null
+          ? "not set (JEV_ROUTER_PLAN=pro|max|api); every tier is offered"
+          : `${status.plan}${
+              (status.planExcluded ?? []).length > 0
+                ? `, does not cover ${(status.planExcluded ?? []).join(", ")}`
+                : ", every tier covered"
+            }`
+      }`,
+    );
+  if (status.catalog !== undefined) lines.push(`  catalog   ${status.catalog}`);
   if (status.spent > 0) lines.push(`  spent     ${usd(status.spent)} this session`);
 
   lines.push("");
@@ -1272,7 +1289,7 @@ function cacheLine(status: Status): string {
         to,
         out,
         status.ttl,
-        priceOfModel(running.model) ?? PRICE[from],
+        priceOfModel(running.model) ?? ladderPrice(from),
         status.cold === true,
       );
       // Never a figure above the real one: under 1k it is shown whole.

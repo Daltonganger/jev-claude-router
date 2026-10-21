@@ -1,18 +1,21 @@
 import assert from "node:assert/strict";
-import { describe, test } from "node:test";
+import { afterEach, describe, test } from "node:test";
 
 import {
   baseModel,
   breakEvenTokens,
   fitsWindow,
   isDowngrade,
+  ladderPrice,
   PRICE,
   priceAt,
   priceOfModel,
+  setOverlay,
   switchVerdict,
   ttlOf,
   usageCost,
   usd,
+  windowOf,
 } from "../hooks/pricing.ts";
 
 describe("pricing", () => {
@@ -251,5 +254,38 @@ describe("baseModel: linear, same answers (2026-09-29)", () => {
     baseModel("[".repeat(100_000));
     baseModel(`${"[".repeat(100_000)}]`);
     assert.ok(performance.now() - t < 100);
+  });
+});
+
+describe("the catalog overlay", () => {
+  afterEach(() => setOverlay(null));
+  const cheap = { input: 1, write5m: 1, write1h: 1, read: 0.1, output: 1 };
+
+  test("a listed id prices from the catalog, dated or not, and the rest from the tables", () => {
+    setOverlay({ models: new Map([["claude-new-1", cheap]]), ladder: {}, windows: {} });
+    assert.equal(priceOfModel("claude-new-1"), cheap);
+    assert.equal(priceOfModel("claude-new-1-20261001"), cheap);
+    assert.equal(priceOfModel("anthropic.claude-new-1-v1:0"), cheap);
+    assert.equal(priceOfModel("claude-fable-5-1"), PRICE.fable);
+    setOverlay(null);
+    assert.equal(priceOfModel("claude-new-1"), null);
+  });
+
+  test("a tier's price and window come from the catalog, else from the tables", () => {
+    assert.equal(ladderPrice("opus"), PRICE.opus);
+    assert.equal(windowOf("haiku"), 1_000_000);
+    setOverlay({ models: new Map(), ladder: { opus: cheap }, windows: { haiku: 200_000 } });
+    assert.equal(ladderPrice("opus"), cheap);
+    assert.equal(ladderPrice("fable"), PRICE.fable);
+    assert.equal(windowOf("haiku"), 200_000);
+    assert.equal(fitsWindow("haiku", 300_000), false);
+    assert.equal(fitsWindow("sonnet", 300_000), true);
+  });
+
+  test("the verdicts price the tier the catalog names", () => {
+    const before = switchVerdict("fable", "opus", 50_000, 1_500);
+    setOverlay({ models: new Map(), ladder: { opus: { ...PRICE.opus, write1h: 80 } }, windows: {} });
+    const after = switchVerdict("fable", "opus", 50_000, 1_500);
+    assert.ok(after.go > before.go);
   });
 });

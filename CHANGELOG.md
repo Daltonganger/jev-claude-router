@@ -18,8 +18,11 @@
   checks count that.
 - **`catalog.json` and a loader for it** (`hooks/catalog.ts`): prices, windows
   and what each plan covers in one file on GitHub, fetched at session start with
-  a saved copy and the built-in tables as the fallback. Not yet read by the
-  router.
+  a saved copy and the built-in tables as the fallback. The router reads its
+  prices, windows and plans; `JEV_ROUTER_CATALOG=0` turns it off, and
+  `/jev` shows where it came from.
+- **`JEV_ROUTER_PLAN`** (`pro`, `max`, `api`): tiers the plan does not cover
+  are not offered. Pro leaves out Fable.
 
 ### Fixes
 

@@ -491,6 +491,14 @@ Microsoft (eigen tekst van de router) goed van fout scheidt, dus `bars` in `cata
   minstens 10 punten vaker goed zijn dan de rest, met p < 0,05 (één toets, dus geen strenge grens). Anders niet, en dan
   gaat er niets in de catalogus. Opdrachten: `bench:extract -- --seed 3 --exclude cases.jsonl,cases2.jsonl --out
   cases3.jsonl`, labelen, `bench:run` met die ene wording, en `bench:bars -- --bar 0.85 wording-c.json`.
+- **Uitslag set C (78 gelabelde prompts, 2026-10-21): de vooraf vastgelegde toets houdt stand, met kanttekeningen.**
+  Microsoft + `sonnet-wider` bij 0,85: 45 van 78 antwoorden (58%) halen de balk, 73% daarvan goed tegen 42% van de rest
+  (p = 0,003). Met de ingebouwde tekst haalt dezelfde balk de toets niet (28 van 78, 68% tegen 56%, p = 0,152).
+  Kanttekeningen: de tekst maakt Microsoft niet nauwkeuriger (exact 60% met beide teksten; set C is 55% haiku, dus
+  "altijd haiku" scoort 55%); sonnet-prompts blijven het zwakke punt (3 van 27 goed met `sonnet-wider`, 4 met de
+  ingebouwde tekst); kostenindex t.o.v. de labels 1,25 met `sonnet-wider` tegen 1,14 ingebouwd; ECE slechter (0,252
+  tegen 0,174). De balk zegt dus wanneer het model zeker is, niet dat het vaker gelijk heeft. Nog niet bepaald: of
+  het in een echte sessie (reeks beurten met stickiness en prijscontrole) iets oplevert; dat meet deze toets niet.
 - Opvallend maar post hoc: Microsoft met de ruimere tierbeschrijving (`sonnet-wider`) heeft wel een scheiding: bij
   een balk van 85% is 64% van de antwoorden goed (55% van alle), tegen 39% eronder (p ≈ 0,001; bij 90%: 65% tegen
   43%, p ≈ 0,003). Dit is gevonden door 40 combinaties van model, tekst en balk te bekijken, dus het geldt pas als

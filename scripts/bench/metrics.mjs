@@ -157,6 +157,16 @@ export function table(summaries) {
   return [head, rule, ...rows].join("\n");
 }
 
+/** Two models' rows as one: the lower or the higher of their two picks, case by case. */
+export function combine(a, b, rule) {
+  return a.map((ra, i) => {
+    const rb = b[i];
+    if (!ra?.pick || !rb?.pick) return { ...ra, pick: null };
+    const pick = (rule === "lower" ? rank(ra.pick) <= rank(rb.pick) : rank(ra.pick) >= rank(rb.pick)) ? ra.pick : rb.pick;
+    return { ...ra, pick, confidence: Math.min(ra.confidence ?? 0, rb.confidence ?? 0) };
+  });
+}
+
 /** The label counts, the always-one-tier baselines and a confusion matrix per model, as text. */
 export function report(rows, summaries) {
   const first = Object.values(rows)[0] ?? [];
@@ -178,6 +188,14 @@ export function report(rows, summaries) {
       const c = compare(rows[names[0]], rows[other]);
       out.push(`  ${other}: ${names[0]} alone right ${c.onlyA}, ${other} alone right ${c.onlyB}, p = ${c.p.toFixed(2)}`);
     }
+  }
+  if (names.length > 1) {
+    out.push(`\nTwo models together, ${names[0]} with each other (the lower or the higher of the two picks). Many rules on a few dozen prompts will find a flattering one by luck: treat this as a lead to test on fresh prompts, not a result.`);
+    for (const other of names.slice(1))
+      for (const rule of ["lower", "higher"]) {
+        const s = summarize(combine(rows[names[0]], rows[other], rule));
+        out.push(`  ${rule.padEnd(6)} of ${names[0]} and ${other}: exact ${pct(s.accuracy)}, too low ${pct(s.under)}, too high ${pct(s.over)}`);
+      }
   }
   void summaries;
   return out.join("\n");

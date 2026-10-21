@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { describe, test } from "node:test";
 
 // @ts-expect-error plain JavaScript modules
-import { agreement, baselines, compare, confusion, labelCounts, percentile, report, summarize, table } from "../scripts/bench/metrics.mjs";
+import { agreement, baselines, combine, compare, confusion, labelCounts, percentile, report, summarize, table } from "../scripts/bench/metrics.mjs";
 // @ts-expect-error plain JavaScript modules
 import { seeded, typedPrompt } from "../scripts/bench/extract.mjs";
 // @ts-expect-error plain JavaScript modules
@@ -141,6 +141,16 @@ describe("the label set, baselines and a fair comparison", () => {
     assert.match(text, /b: a alone right 0, b alone right 3, p = 0\.25/);
   });
 
+  test("two models together: the lower or the higher pick, case by case", () => {
+    const a = [row("sonnet", "haiku"), row("sonnet", "fable"), row("sonnet", "sonnet")];
+    const b = [row("sonnet", "opus"), row("sonnet", "sonnet"), row("sonnet", null)];
+    assert.deepEqual(combine(a, b, "lower").map((r: { pick: string | null }) => r.pick), ["haiku", "sonnet", null]);
+    assert.deepEqual(combine(a, b, "higher").map((r: { pick: string | null }) => r.pick), ["opus", "fable", null]);
+    const text = report({ a, b }, {});
+    assert.match(text, /lower\s+of a and b: exact 50%/);
+    assert.match(text, /treat this as a lead to test on fresh prompts/);
+  });
+
   test("a prompt the router never sends to the model is left out", () => {
     for (const p of ["ok", "Yes!", "go ahead.", "use opus for this", "switch to haiku"]) assert.equal(routerAsks(p), false, p);
     for (const p of ["rename foo to bar", "Ja, maak dat", "ok but first explain the change"]) assert.equal(routerAsks(p), true, p);
@@ -185,7 +195,7 @@ describe("extract", () => {
 
 /** A stand-in for OpenRouter's Decisions API: the tier follows a keyword in the state. */
 function standIn() {
-  const seen: { path: string; auth: string | undefined; model: string; questions: string[] }[] = [];
+  const seen: { path: string; auth: string | undefined; model: string; questions: string[]; options: string[] }[] = [];
   const server = createServer((req, res) => {
     let b = "";
     req.on("data", (c) => (b += c));
@@ -196,17 +206,20 @@ function standIn() {
         return;
       }
       const body = JSON.parse(b);
-      seen.push({ path: req.url ?? "", auth: req.headers.authorization, model: body.model, questions: Object.keys(body.questions) });
+      seen.push({ path: req.url ?? "", auth: req.headers.authorization, model: body.model, questions: Object.keys(body.questions), options: Object.keys(body.questions.tier.criteria) });
       const state: string = body.state;
       if (body.model === "bad/model") {
         res.statusCode = 500;
         res.end("{}");
         return;
       }
-      const tier = /rename|typo/.test(state) ? "haiku" : /small edit/.test(state) ? "sonnet" : /plan/.test(state) ? "fable" : "opus";
+      const wanted = /rename|typo/.test(state) ? "haiku" : /small edit/.test(state) ? "sonnet" : /plan/.test(state) ? "fable" : "opus";
+      // A tier that is not among the options cannot be chosen: the nearest below is.
+      const options = Object.keys(body.questions.tier.criteria);
+      const tier = options.includes(wanted) ? wanted : options[options.length - 1];
       // The model called "unsure" splits its mass; the others are sure.
       const p = body.model === "unsure/model" ? 0.5 : 0.97;
-      const probabilities = Object.fromEntries(["haiku", "sonnet", "opus", "fable"].map((t) => [t, t === tier ? p : (1 - p) / 3]));
+      const probabilities = Object.fromEntries(options.map((t) => [t, t === tier ? p : (1 - p) / (options.length - 1)]));
       res.setHeader("content-type", "application/json");
       res.end(
         JSON.stringify({
@@ -272,6 +285,22 @@ describe("run, against a stand-in for the Decisions API", () => {
       // From the probabilities: (4·0.97 − 1)/3. As the router reads Jev: the `confidence` field, 0.123.
       assert.ok(Math.abs(common.rows["typesafe/jev-1.14"][0].confidence - (4 * 0.97 - 1) / 3) < 1e-9);
       assert.equal(router.rows["typesafe/jev-1.14"][0].confidence, 0.123);
+    } finally {
+      s.close();
+    }
+  });
+
+  test("only the tiers you offer are put to the model, and only those can be picked", async () => {
+    const s = await standIn();
+    try {
+      const r = await run({ cases, models: ["typesafe/jev-1.14"], base: s.base, api: "decisions", key: "k", offered: ["haiku", "sonnet", "opus"] });
+      assert.ok(s.seen.every((x) => x.options.join() === "haiku,sonnet,opus"));
+      // The "plan" prompt, labelled fable, is answered opus now: fable was never an option.
+      assert.equal(r.rows["typesafe/jev-1.14"][3].pick, "opus");
+      // A model that names a tier outside the options is an error, not a pick.
+      const stray = async () => new Response(JSON.stringify({ answers: { tier: { type: "choice", choice: "fable", probabilities: { haiku: 0.1, fable: 0.9 } }, effort: { type: "score", score: 1 } } }), { status: 200 });
+      const bad = await ask({ base: "http://x", api: "decisions", key: "k", model: "m", prompt: "p", offered: ["haiku", "sonnet"], fetchImpl: stray as unknown as typeof fetch });
+      assert.equal(bad.error, "no usable tier");
     } finally {
       s.close();
     }

@@ -10,6 +10,9 @@
  *   node --experimental-strip-types scripts/bench/run.mjs --catalog     # the decision models on offer; needs no key
  *
  * Options:
+ *   --tiers haiku,sonnet,opus   the tiers the model may choose from (default all four). Use the tiers the
+ *                               router really offers you: on Pro with fable off, leave fable out, or the
+ *                               model is asked to pick a tier you would never get.
  *   --api decisions|systemone   OpenRouter's Decisions API (default) or its System One endpoint (Jev only)
  *   --confidence probabilities|router   which number the table reads (default probabilities: the same
  *                                       measure for every model; `router` is what the plugin would read)
@@ -29,9 +32,9 @@ import { agreement, report, summarize, table, TIERS } from "./metrics.mjs";
 const TIMEOUT_MS = 20_000;
 
 /** One question to one model. Resolves to a row; never throws. */
-export async function ask({ base, api, key, model, prompt, fetchImpl = fetch }) {
+export async function ask({ base, api, key, model, prompt, offered = TIERS, fetchImpl = fetch }) {
   const path = api === "systemone" ? "/api/v1/systemone" : "/api/alpha/decisions";
-  const body = { ...requestBodyOf(stateOf(prompt), TIERS), model };
+  const body = { ...requestBodyOf(stateOf(prompt), offered), model };
   const started = performance.now();
   for (let attempt = 0; attempt < 2; attempt++) {
     const controller = new AbortController();
@@ -58,8 +61,8 @@ export async function ask({ base, api, key, model, prompt, fetchImpl = fetch }) 
       }
       // The router's own reading of the answer, and the one every model is measured by.
       const source = confidenceSourceOf("openrouter", model);
-      const router = decisionOf(json.answers, TIERS, source);
-      const common = decisionOf(json.answers, TIERS, "probabilities");
+      const router = decisionOf(json.answers, offered, source);
+      const common = decisionOf(json.answers, offered, "probabilities");
       if (router === null || common === null) return { pick: null, ms, error: "no usable tier" };
       const cost = typeof json.usage?.cost === "number" ? json.usage.cost : undefined;
       return {
@@ -96,11 +99,11 @@ async function pool(items, size, fn) {
 }
 
 /** Runs every model over every case. Returns { rows: { model: row[] }, summaries, agreement }. */
-export async function run({ cases, models, base, api, key, concurrency = 4, confidence = "probabilities", fetchImpl }) {
+export async function run({ cases, models, base, api, key, concurrency = 4, confidence = "probabilities", offered = TIERS, fetchImpl }) {
   const rows = {};
   for (const model of models) {
     rows[model] = await pool(cases, concurrency, async (c) => {
-      const r = await ask({ base, api, key, model, prompt: c.prompt, fetchImpl });
+      const r = await ask({ base, api, key, model, prompt: c.prompt, offered, fetchImpl });
       return { id: c.id, label: c.tier, ...r, confidence: confidence === "router" ? r.confidence : r.confidenceP };
     });
   }
@@ -155,10 +158,17 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     console.error("no labelled cases: run scripts/bench/label.mjs first");
     process.exit(2);
   }
+  const offered = arg("tiers", TIERS.join(",")).split(/[,\s]+/).filter((t) => TIERS.includes(t));
+  if (offered.length === 0) {
+    console.error(`--tiers names none of ${TIERS.join(", ")}`);
+    process.exit(2);
+  }
+  const outside = cases.filter((c) => !offered.includes(c.tier)).length;
+  if (outside > 0) console.log(`${outside} labelled prompts carry a tier that is not offered (${TIERS.filter((t) => !offered.includes(t)).join(", ")}); no model can match them.`);
   const models = arg("models", "typesafe/jev-1.14").split(",").map((m) => m.trim()).filter(Boolean);
   const mode = arg("confidence", "probabilities");
-  const result = await run({ cases, models, base, api: arg("api", "decisions"), key, concurrency: Number(arg("concurrency", "4")), confidence: mode });
-  console.log(`${cases.length} labelled prompts, ${models.length} models, confidence read from ${mode === "router" ? "what the router reads" : "the probabilities"}\n`);
+  const result = await run({ cases, models, base, api: arg("api", "decisions"), key, concurrency: Number(arg("concurrency", "4")), confidence: mode, offered });
+  console.log(`${cases.length} labelled prompts, ${models.length} models offered ${offered.join(", ")}, confidence read from ${mode === "router" ? "what the router reads" : "the probabilities"}\n`);
   console.log(table(result.summaries));
   for (const [model, rows] of Object.entries(result.rows)) {
     const counts = {};

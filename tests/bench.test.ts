@@ -18,7 +18,7 @@ import { seeded, typedPrompt } from "../scripts/bench/extract.mjs";
 // @ts-expect-error plain JavaScript modules
 import { merge } from "../scripts/bench/report.mjs";
 // @ts-expect-error plain JavaScript modules
-import { ask, catalog, layaCatalog, routerAsks, run, specOf, wordingOf } from "../scripts/bench/run.mjs";
+import { ask, catalog, layaCatalog, OPTIONS, routerAsks, run, specOf, unknownOption, wordingOf } from "../scripts/bench/run.mjs";
 
 const row = (label: string, pick: string | null, confidence = 0.9, ms = 100, cost = 0.00001) => ({ label, pick, confidence, ms, cost });
 
@@ -247,6 +247,28 @@ describe("other wording for the tier question", () => {
       assert.match(bad.err, /--criteria: bad: "sonet" is not a tier/);
     } finally {
       s.close();
+    }
+  });
+});
+
+describe("options", () => {
+  test("a name the script does not take is an error, not something skipped", () => {
+    assert.equal(unknownOption(["--cases", "a.jsonl", "--criteria", "x.json"], OPTIONS), null);
+    assert.equal(unknownOption(["--cases", "a.jsonl", "--criterai", "x.json"], OPTIONS), "--criterai");
+  });
+
+  test("the command line refuses one, for run and for extract", async () => {
+    const { execFile } = await import("node:child_process");
+    const go = (script: string, ...args: string[]) =>
+      new Promise<{ code: number; err: string }>((resolve) =>
+        execFile(process.execPath, ["--experimental-strip-types", new URL(`../scripts/bench/${script}`, import.meta.url).pathname, ...args], (err, _out, errText) =>
+          resolve({ code: err ? ((err as { code?: number }).code ?? 1) : 0, err: errText }),
+        ),
+      );
+    for (const script of ["run.mjs", "extract.mjs"]) {
+      const r = await go(script, "--bogus", "x");
+      assert.equal(r.code, 2, script);
+      assert.match(r.err, /unknown option --bogus/);
     }
   });
 });

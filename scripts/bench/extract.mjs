@@ -63,6 +63,12 @@ function* jsonlFiles(dir) {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const known = ["dir", "n", "seed", "out", "exclude"];
+  const stray = process.argv.slice(2).find((a) => a.startsWith("--") && !known.includes(a.slice(2)));
+  if (stray !== undefined) {
+    console.error(`unknown option ${stray}. This script takes: ${known.map((o) => `--${o}`).join(" ")}`);
+    process.exit(2);
+  }
   const arg = (name, fallback) => {
     const i = process.argv.indexOf(`--${name}`);
     return i === -1 ? fallback : process.argv[i + 1];

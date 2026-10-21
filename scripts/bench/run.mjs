@@ -209,7 +209,21 @@ export async function catalog({ base, fetchImpl = fetch }) {
   }));
 }
 
+/** The options this script takes. Anything else on the command line is a mistake, not something to skip. */
+export const OPTIONS = ["base", "catalog", "laya-catalog", "laya-url", "laya-concurrency", "cases", "models", "tiers", "api", "confidence", "concurrency", "limit", "out", "criteria"];
+
+/** The first `--option` in `argv` that is not one of `known`, or null. */
+export function unknownOption(argv, known) {
+  for (const a of argv) if (a.startsWith("--") && !known.includes(a.slice(2))) return a;
+  return null;
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const stray = unknownOption(process.argv.slice(2), OPTIONS);
+  if (stray !== null) {
+    console.error(`unknown option ${stray}. This script takes: ${OPTIONS.map((o) => `--${o}`).join(" ")}`);
+    process.exit(2);
+  }
   const arg = (name, fallback) => {
     const i = process.argv.indexOf(`--${name}`);
     return i === -1 ? fallback : process.argv[i + 1];

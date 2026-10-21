@@ -440,6 +440,7 @@ All settings go in the `env` block of `~/.claude/settings.json`.
 | `OPENROUTER_API_KEY` | | OpenRouter key, for `JEV_ROUTER_PROVIDER=openrouter` (Jev 1.14, `https://openrouter.ai/api/v1/systemone`). |
 | `COMMANDCODE_API_KEY` | | Command Code key, for `JEV_ROUTER_PROVIDER=commandcode` (the Provider API; GOAT plan and above). |
 | `OPENCODE_API_KEY` | | OpenCode Console key, for `JEV_ROUTER_PROVIDER=opencode`. Also set `JEV_ROUTER_JEV_MODEL`: the router does not know OpenCode's id for Jev. |
+| `JEV_ROUTER_API` | `systemone` | `decisions` makes the `openrouter` route use OpenRouter's Decisions API (`/api/alpha/decisions`) instead of its System One endpoint. Same questions and answers, and it also serves the other decision models in OpenRouter's catalog: name one in `JEV_ROUTER_JEV_MODEL` (`npm run bench:run -- --catalog` lists them). A model that is not Jev is read for its probabilities only, and named on the route line (`pplx-decider-v1.2 96%`). The API is alpha. |
 | `LAYA_BASE_URL` | | Your own Laya server, e.g. `https://nas.lan:8443`. https only, any host, no login in the URL; a trailing `/v1/systemone` is dropped. Setting it alone makes Laya the provider. |
 | `LAYA_API_KEY` | | Sent to the Laya server and nowhere else; leave unset for a server that asks for none. |
 | `JEV_ROUTER_PROVIDER` | TypeSafe if its key is set, else Laya if `LAYA_BASE_URL` is set, else the gateway | One of `typesafe` (or `direct`), `gateway` (or `vercel`), `openrouter`, `commandcode`, `opencode`, `laya`, or a list tried in order, e.g. `laya,openrouter`. A named route without its key or URL is an error. OpenRouter, Command Code and OpenCode are never chosen by their key alone, since those keys are used for other things; anything unrecognised chooses by the keys set. |
@@ -461,6 +462,16 @@ asked with the time left; when it times out the budget is spent and the turn goe
 unrouted. The thresholds below were tuned on Jev; they are used unchanged for Laya
 until they are measured on it. Compaction by Jev stays on TypeSafe direct, whatever
 else is listed.
+
+**Comparing decision models.** `scripts/bench` measures which model routes best on your
+own prompts: `npm run bench:extract` pulls the prompts you typed out of Claude Code's
+transcripts (locally, into `cases.jsonl`, which is git-ignored), `npm run bench:label`
+asks you for the tier each needs (1 haiku … 4 fable), and
+`OPENROUTER_API_KEY=… npm run bench:run -- --cases cases.jsonl --models typesafe/jev-1.14,perplexity/pplx-decider-v1.2`
+asks each model the router's own questions and prints, per model: how often it picks
+your tier, how often too low or too high, its calibration, how many answers clear the
+75% bar and how right those are, latency, and cost per thousand decisions. The
+prompts go to OpenRouter and on to each provider.
 
 **Routing**
 

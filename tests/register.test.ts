@@ -97,6 +97,10 @@ function load(
         // Laya's own `confidence` is a different quantity (one minus the
         // normalised entropy); the Jev-scale number is `x_jev_confidence`.
         const laya = url.includes("nas.lan");
+        // The chosen tier carries `confidence`, the rest share what is left.
+        const probabilities = Object.fromEntries(
+          ["haiku", "sonnet", "opus", "fable"].map((t) => [t, t === tier ? confidence : (1 - confidence) / 3]),
+        );
         return {
           ok: good,
           status: good ? 200 : 500,
@@ -104,8 +108,8 @@ function load(
           text: JSON.stringify({
             answers: {
               tier: laya
-                ? { type: "choice", choice: tier, confidence: 0.99, x_jev_confidence: confidence }
-                : { type: "choice", choice: tier, confidence },
+                ? { type: "choice", choice: tier, confidence: 0.99, x_jev_confidence: confidence, probabilities }
+                : { type: "choice", choice: tier, confidence, probabilities },
               effort: laya
                 ? { type: "score", score, confidence: 0.99, x_jev_confidence: scoreConfidence }
                 : { type: "score", score, confidence: scoreConfidence },
@@ -5785,5 +5789,60 @@ describe("register: Laya and a chain of providers (2026-10-21)", () => {
   test("compaction by Jev needs TypeSafe direct, and says so for a Laya route", async () => {
     const kit = await started({ LAYA_BASE_URL: "https://nas.lan" });
     assert.match(await report(kit), /compact\s+on, but the laya route cannot score tool calls/);
+  });
+});
+
+describe("register: OpenRouter's Decisions API (2026-10-21)", () => {
+  const started = async (over: Record<string, string | undefined> = {}) => {
+    const kit = load({ JEV_ROUTER_STICKY: "1", JEV_ROUTER_PROVIDER: "openrouter", OPENROUTER_API_KEY: "or-key", ...over });
+    await kit.hooks.get("session.start")!(kit.$, {}, async (e: unknown) => e);
+    return kit;
+  };
+  type Kit = Awaited<ReturnType<typeof started>>;
+  const report = async (kit: Kit) =>
+    (await kit.hooks.get('command.run:{"command":"jev"}')!(kit.$, { args: "" })).text as string;
+  async function turn(kit: Kit, id: string) {
+    await kit.hooks.get("turn.start")!(kit.$, { text: "implement it", turnId: id }, async (e: unknown) => e);
+    let sent: { model?: string; effort?: string } = {};
+    const chunks = await collect(
+      kit.hooks.get("turn.step")!(kit.$, { turnId: id, index: 0 }, (e: { model: string; effort: string }) => {
+        sent = e;
+        return answeredBy(e.model ?? "claude-opus-5-5");
+      }),
+    );
+    return { sent, text: chunks.filter((c: { kind: string }) => c.kind === "text").map((c: { text: string }) => c.text).join("") };
+  }
+
+  test("JEV_ROUTER_API=decisions asks /api/alpha/decisions with the same key and Jev 1.14", async () => {
+    const kit = await started({ JEV_ROUTER_API: "decisions" });
+    kit.setTier("opus", 0.95, 2);
+    await turn(kit, "d1");
+    assert.deepEqual(kit.asked(), [{ url: "https://openrouter.ai/api/alpha/decisions", authorization: "Bearer or-key" }]);
+    assert.match(await report(kit), /provider\s+openrouter · OPENROUTER_API_KEY is set · typesafe\/jev-1.14/);
+  });
+
+  test("without it the route is System One, as before", async () => {
+    const kit = await started();
+    kit.setTier("opus", 0.95, 2);
+    await turn(kit, "d2");
+    assert.equal(kit.asked()[0]?.url, "https://openrouter.ai/api/v1/systemone");
+  });
+
+  test("another decision model is named on the line, and read for its probabilities only", async () => {
+    const kit = await started({ JEV_ROUTER_API: "decisions", JEV_ROUTER_JEV_MODEL: "perplexity/pplx-decider-v1.2" });
+    // `confidence` says 0.5; the probabilities say 0.97 for opus, which is (4·0.97 − 1)/3 = 96%.
+    kit.setTier("sonnet", 0.95, 1, 0.9);
+    await turn(kit, "d3");
+    kit.setTier("opus", 0.97, 2, 0.9);
+    const t = await turn(kit, "d4");
+    assert.equal(t.sent.model, "claude-opus-5-5");
+    assert.match(t.text, /opus · .* · pplx-decider-v1\.2 96%/);
+  });
+
+  test("a model that is Jev is read as Jev, whichever route it comes through", async () => {
+    const kit = await started({ JEV_ROUTER_API: "decisions", JEV_ROUTER_JEV_MODEL: "typesafe/jev-1.13-20260917" });
+    kit.setTier("opus", 0.97, 2, 0.9);
+    const t = await turn(kit, "d5");
+    assert.match(t.text, /Jev 97%/);
   });
 });

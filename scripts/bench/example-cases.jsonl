@@ -1,0 +1,12 @@
+{"id":1,"prompt":"what does the -n flag do in grep?","tier":"haiku"}
+{"id":2,"prompt":"rename the variable foo to count in utils.ts","tier":"haiku"}
+{"id":3,"prompt":"is this function async? just yes or no","tier":"haiku"}
+{"id":4,"prompt":"add a null check before we read user.email on line 42","tier":"sonnet"}
+{"id":5,"prompt":"change the default timeout from 30 to 60 seconds and update the test","tier":"sonnet"}
+{"id":6,"prompt":"implement pagination on the /orders endpoint, cursor-based, with tests","tier":"opus"}
+{"id":7,"prompt":"refactor the retry logic into a helper and use it in the three clients","tier":"opus"}
+{"id":8,"prompt":"add a CSV export to the reports page, including the filters currently applied","tier":"opus"}
+{"id":9,"prompt":"design the migration from our monolith's session store to a shared service; weigh the options and write up a plan","tier":"fable"}
+{"id":10,"prompt":"the nightly job fails about once a week with no error; work out why, systematically","tier":"fable"}
+{"id":11,"prompt":"which of these three architectures should we pick for the sync engine and why","tier":"fable"}
+{"id":12,"prompt":"fix the typo in the README heading","tier":"haiku"}

@@ -345,10 +345,41 @@ Nog open:
   worden.
 - **Drempels per beslismodel** (stap 5): de balk 0,75 en de ondergrenzen zijn op Jev afgestemd en
   gelden ongewijzigd voor Laya tot ze gemeten zijn.
-- **De Decisions-API** (`/api/alpha/decisions`, `https://api.perplexity.ai/v1/decisions`) is niet
-  gebouwd: het antwoordformaat is niet gezien. Perplexity zelf hoort bij stap 5.
+- **De Decisions-API van Perplexity zelf** (`https://api.perplexity.ai/v1/decisions`) is niet
+  gebouwd; die van OpenRouter wel (zie hieronder).
 - **Voorwaarden** van Command Code en OpenCode voor gebruik buiten hun eigen agent zijn niet gelezen;
   lees ze voor je die routes inzet.
+
+### Stand van zaken stap 5
+
+**OpenRouter's Decisions API is gebouwd** (`JEV_ROUTER_API=decisions`). Uit de documentatie en de
+`openrouter-decisions`-skill van OpenRouter: `POST https://openrouter.ai/api/alpha/decisions` met
+`Authorization: Bearer`, een lichaam met `model`, `state` en `questions` (dezelfde twee vragen als
+System One: een `choice` met `criteria` als object en een `score` met een geordende lijst), en een antwoord
+met `id`, `model` (de exacte build), `provider`, `answers` en `usage.cost`. Elk antwoord heeft een `type`;
+`probabilities`, `confidence` en `legend` zijn optioneel. De catalogus staat op
+`GET /api/v1/models?output_modalities=decisions` en vraagt geen sleutel.
+Daardoor is er weinig bij te bouwen: een ander pad, en voor een model dat geen Jev is de zekerheid alleen uit
+de kansen lezen (zijn `confidence` heeft geen bekende betekenis). De routeregel noemt zo'n model bij zijn id.
+**Niet gezien:** een echt antwoord. openrouter.ai is vanuit deze omgeving niet bereikbaar, dus dit is
+gebouwd naar de documentatie en getest tegen een stand-in; één echte call (`npm run bench:run`) bevestigt het.
+Ook niet gecontroleerd: welke ids Perplexity Decider V1.2 en Microsoft Decision-1 op OpenRouter hebben
+(`npm run bench:run -- --catalog` toont ze).
+
+**Gereedschap voor de meting** (`scripts/bench`, `tests/bench.test.ts`):
+1. `npm run bench:extract` haalt de prompts die jij typte uit Claude Codes transcripts (lokaal; tool-resultaten,
+   subagent-beurten, commando's en engine-tekst blijven eruit; 80 willekeurige, met een seed).
+2. `npm run bench:label` laat je elke prompt een tier geven (1 haiku … 4 fable, s, u, q); de voortgang wordt na
+   elk antwoord bewaard.
+3. `npm run bench:run -- --cases cases.jsonl --models typesafe/jev-1.14,<ander model>` stelt de vragen van de
+   router aan elk model en geeft per model: nauwkeurigheid, te laag en te hoog (te laag is het kwaliteitsrisico,
+   te hoog het kostenrisico), de kalibratie (ECE en per band), hoeveel antwoorden de balk van 75% halen en
+   hoe vaak die goed zijn, latency (gemiddeld en p95), kosten per duizend beslissingen en de overeenstemming
+   tussen modellen. Standaard leest de tabel de zekerheid voor elk model uit de kansen, zodat de getallen
+   vergelijkbaar zijn; `--confidence router` geeft wat de plugin zou lezen.
+Beperkingen die ik wil noemen: het label is jouw oordeel over een prompt, niet over het resultaat van het werk; een
+set van 80 prompts geeft een foutmarge van rond de tien procentpunt, dus verschillen van een paar punten
+zeggen niets; en latency is die vanaf jouw machine.
 
 ## 6. Compaction
 
@@ -407,7 +438,9 @@ typedefinities komen van een vaste commit (`npm run types`); controleren of die 
    dichtstbijzijnde die het wel kent.
 4. Provider-laag: eigen host-allowlist, Laya, OpenRouter (5.4), `x_jev_confidence`. **Gedaan**
    (hieronder "Stand van zaken stap 4").
-5. Meetset en benchmark; pas daarna Perplexity en drempels per beslismodel.
+5. Meetset en benchmark; pas daarna Perplexity en drempels per beslismodel. **Gereedschap
+   gebouwd** (`scripts/bench`, hieronder "Stand van zaken stap 5"); de meting zelf wacht op jouw
+   gelabelde prompts en een OpenRouter-sleutel.
 6. Auto-detectie van het plan, na test op de echte client.
 7. Extra routes voor Jev 1.14 (Command Code GOAT, OpenCode; 5.5), als de voorwaarden het
    toestaan.

@@ -1103,3 +1103,27 @@ describe("decisionOf reads the confidence a route means", () => {
     assert.ok(Math.abs((d?.confidence ?? 0) - 0.6) < 1e-9);
   });
 });
+
+describe("decisionOf for another decision model (2026-10-21)", () => {
+  test("neither confidence field is read: the number comes from the probabilities", () => {
+    const answers = {
+      tier: { type: "choice", choice: "opus", confidence: 0.1, x_jev_confidence: 0.2, probabilities: { haiku: 0.01, sonnet: 0.02, opus: 0.96, fable: 0.01 } },
+      effort: { type: "score", score: 2, confidence: 0.05, probabilities: [0.02, 0.03, 0.9, 0.03, 0.02] },
+    };
+    const d = decisionOf(answers, TIERS, "probabilities", "pplx-decider-v1.2");
+    assert.ok(Math.abs((d?.confidence ?? 0) - (4 * 0.96 - 1) / 3) < 1e-9);
+    assert.ok(Math.abs((d?.effortConfidence ?? 0) - (5 * 0.9 - 1) / 4) < 1e-9);
+    assert.equal(d?.decider, "pplx-decider-v1.2");
+  });
+
+  test("score probabilities may come as an object over the levels", () => {
+    const d = decisionOf({ tier: { type: "choice", choice: "haiku", probabilities: { haiku: 1 } }, effort: { type: "score", score: 0, probabilities: { "0": 0.8, "1": 0.2 } } }, ["haiku"], "probabilities");
+    assert.ok(Math.abs((d?.effortConfidence ?? 0) - 0.6) < 1e-9);
+  });
+
+  test("with no probabilities there is no confidence to read, not a made-up one", () => {
+    const d = decisionOf({ tier: { type: "choice", choice: "opus", confidence: 0.99 }, effort: { type: "score", score: 2, confidence: 0.99 } }, TIERS, "probabilities");
+    assert.equal(d?.confidence, 0);
+    assert.equal(d?.effortConfidence, 0);
+  });
+});

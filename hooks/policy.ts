@@ -281,9 +281,11 @@ export function decisionOf(
   offered: readonly Tier[] = TIERS,
   /**
    * Which confidence the answer is read for (see `confidenceSourceOf`): `jev`
-   * reads `confidence`; `x_jev` reads `x_jev_confidence` and never `confidence`.
+   * reads `confidence`; `x_jev` reads `x_jev_confidence` and never `confidence`;
+   * `probabilities` reads neither (another model's number has no known meaning)
+   * and derives both confidences from the probabilities.
    */
-  source: "jev" | "x_jev" = "jev",
+  source: "jev" | "x_jev" | "probabilities" = "jev",
   /** Who answered, when it is not Jev, for the route line. */
   decider?: string,
 ): Decision | null {
@@ -304,6 +306,7 @@ export function decisionOf(
   // it live and then have the whole Decision silently dropped on restore.
   // The answer's own number, in the sense `source` names, or undefined.
   const readConfidence = (answer: object): number | undefined => {
+    if (source === "probabilities") return undefined;
     const v = (answer as Record<string, unknown>)[source === "x_jev" ? "x_jev_confidence" : "confidence"];
     return typeof v === "number" && Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : undefined;
   };
@@ -316,10 +319,26 @@ export function decisionOf(
     model: MODEL_OF[choice as Tier],
     effort: effortOf(isRecord(effort) ? effort.score : undefined),
     confidence,
-    effortConfidence: isRecord(effort) ? (readConfidence(effort) ?? 0) : 0,
+    effortConfidence: isRecord(effort)
+      ? (readConfidence(effort) ?? (source === "probabilities" ? spreadConfidence(effort.probabilities) : 0))
+      : 0,
     ...(probabilities !== undefined ? { probabilities } : {}),
     ...(decider !== undefined ? { decider } : {}),
   };
+}
+
+/**
+ * The confidence of a score answer from its probabilities, which may come as
+ * an object or an array over the levels: the same measure as `confidenceFrom`,
+ * `(n·p_max − 1) / (n − 1)`. 0 when there are none to read.
+ */
+function spreadConfidence(raw: unknown): number {
+  const values = (Array.isArray(raw) ? raw : isRecord(raw) ? Object.values(raw) : []).filter(
+    (v): v is number => typeof v === "number" && Number.isFinite(v),
+  );
+  if (values.length < 2) return 0;
+  const n = values.length;
+  return Math.min(1, Math.max(0, (n * Math.max(...values) - 1) / (n - 1)));
 }
 
 /** The per-tier probabilities from a choice answer, offered tiers only. */

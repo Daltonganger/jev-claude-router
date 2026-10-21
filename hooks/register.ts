@@ -523,6 +523,7 @@ async function seedSettings(
     TYPESAFE_BASE_URL: await $.env.get("TYPESAFE_BASE_URL"),
     JEV_ROUTER_ALLOW_CUSTOM_BASE: await $.env.get("JEV_ROUTER_ALLOW_CUSTOM_BASE"),
     JEV_ROUTER_JEV_MODEL: await $.env.get("JEV_ROUTER_JEV_MODEL"),
+    JEV_ROUTER_API: await $.env.get("JEV_ROUTER_API"),
     OPENROUTER_API_KEY: await $.env.get("OPENROUTER_API_KEY"),
     COMMANDCODE_API_KEY: await $.env.get("COMMANDCODE_API_KEY"),
     OPENCODE_API_KEY: await $.env.get("OPENCODE_API_KEY"),

@@ -449,3 +449,49 @@ describe("what a route says about its confidence", () => {
     }
   });
 });
+
+describe("OpenRouter's Decisions API, and other decision models", () => {
+  const base = { JEV_ROUTER_PROVIDER: "openrouter", OPENROUTER_API_KEY: "or" };
+
+  it("JEV_ROUTER_API=decisions moves only the openrouter route to /api/alpha/decisions", () => {
+    const p = providerOf(env({ ...base, JEV_ROUTER_API: " Decisions " }));
+    assert.deepStrictEqual(p, {
+      ok: true,
+      name: "openrouter",
+      endpoint: "https://openrouter.ai/api/alpha/decisions",
+      model: "typesafe/jev-1.14",
+      apiKey: "or",
+      api: "decisions",
+    });
+    const other = providerOf(env({ LAYA_BASE_URL: "https://nas.lan", JEV_ROUTER_API: "decisions" }));
+    assert.ok(other.ok);
+    assert.strictEqual(other.endpoint, "https://nas.lan/v1/systemone");
+    assert.strictEqual("api" in other, false);
+  });
+
+  it("anything else stays System One", () => {
+    for (const api of [undefined, "", "systemone", "bogus"]) {
+      const p = providerOf(env({ ...base, JEV_ROUTER_API: api }));
+      assert.ok(p.ok);
+      assert.strictEqual(p.endpoint, "https://openrouter.ai/api/v1/systemone");
+    }
+  });
+
+  it("the model can be any decision model in the catalog", () => {
+    const p = providerOf(env({ ...base, JEV_ROUTER_API: "decisions", JEV_ROUTER_JEV_MODEL: "perplexity/pplx-decider-v1.2" }));
+    assert.ok(p.ok);
+    assert.strictEqual(p.model, "perplexity/pplx-decider-v1.2");
+  });
+
+  it("a model that is not Jev is named by its id and read for its probabilities", () => {
+    assert.strictEqual(labelOf("openrouter", "perplexity/pplx-decider-v1.2"), "pplx-decider-v1.2");
+    assert.strictEqual(confidenceSourceOf("openrouter", "perplexity/pplx-decider-v1.2"), "probabilities");
+    assert.strictEqual(labelOf("openrouter", "microsoft/decision-1"), "decision-1");
+    assert.strictEqual(labelOf("openrouter", "typesafe/jev-1.14"), "Jev");
+    assert.strictEqual(confidenceSourceOf("openrouter", "typesafe/jev-1.14-20261014"), "jev");
+    assert.strictEqual(confidenceSourceOf("commandcode", "typesafe/jev-1.14.0"), "jev");
+    assert.strictEqual(labelOf("typesafe", "anything"), "Jev");
+    assert.strictEqual(confidenceSourceOf("gateway", "typesafe-ai/jev"), "jev");
+    assert.strictEqual(labelOf("openrouter"), "Jev", "no model named: it is the default, Jev");
+  });
+});

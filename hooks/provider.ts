@@ -23,6 +23,13 @@
  * is the address of your own server, any https host, and LAYA_API_KEY goes
  * only there.
  *
+ * JEV_ROUTER_API=decisions makes the openrouter route use OpenRouter's Decisions
+ * API (POST /api/alpha/decisions) instead of its System One endpoint. The
+ * request and the answers have the same shape; the Decisions API also serves
+ * the other decision models in OpenRouter's catalog, which JEV_ROUTER_JEV_MODEL
+ * can name (`GET https://openrouter.ai/api/v1/models?output_modalities=decisions`
+ * lists them). A model that is not Jev is read for its probabilities only.
+ *
  * JEV_ROUTER_JEV_MODEL pins the model on the routes that take one. The
  * default `jev-latest` is an alias that moves when TypeSafe ships a release,
  * and the confidences the sticky bar is tuned against can move with it;
@@ -38,6 +45,8 @@ export type ProviderOk = {
   model: string;
   /** Empty for a Laya server that asks for none. */
   apiKey: string;
+  /** Present when the route is asked through OpenRouter's Decisions API rather than System One. */
+  api?: "decisions";
 };
 
 export type ProviderResult =
@@ -54,6 +63,8 @@ export type ProviderEnv = {
   TYPESAFE_BASE_URL: string | undefined;
   JEV_ROUTER_ALLOW_CUSTOM_BASE?: string | undefined;
   JEV_ROUTER_JEV_MODEL?: string | undefined;
+  /** `decisions`: OpenRouter's Decisions API. Anything else: System One. */
+  JEV_ROUTER_API?: string | undefined;
   OPENROUTER_API_KEY?: string | undefined;
   COMMANDCODE_API_KEY?: string | undefined;
   OPENCODE_API_KEY?: string | undefined;
@@ -66,9 +77,21 @@ const TYPESAFE_MODEL_DEFAULT = "jev-latest";
 const TYPESAFE_BASE_DEFAULT = "https://api.typesafe.ai";
 const GATEWAY_BASE = "https://ai-gateway.vercel.sh";
 
-/** What the name of a route is on the route line, where it is not Jev. */
-export function labelOf(name: RouteName): string {
-  return name === "laya" ? "Laya" : "Jev";
+/** Whether a model id is one of Jev's: `jev-latest`, `typesafe/jev-1.14`. */
+function isJev(model: string | undefined): boolean {
+  return model === undefined || /\bjev\b|jev-/i.test(model);
+}
+
+/**
+ * What the answerer is called on the route line, where it is not Jev: Laya, or
+ * the id of another decision model asked through OpenRouter
+ * (`pplx-decider-v1.2` for `perplexity/pplx-decider-v1.2`).
+ */
+export function labelOf(name: RouteName, model?: string): string {
+  if (name === "laya") return "Laya";
+  if (name === "typesafe" || name === "gateway" || isJev(model)) return "Jev";
+  const id = (model ?? "").slice((model ?? "").lastIndexOf("/") + 1);
+  return id.slice(0, 24) || "model";
 }
 
 /**
@@ -76,10 +99,12 @@ export function labelOf(name: RouteName): string {
  * sends is Jev's, or derived from the probabilities when it sends none.
  * `x_jev`: its own `confidence` means something else (Laya's is one minus the
  * normalised entropy), so `x_jev_confidence` is read, and the probabilities
- * when it is absent; `confidence` never.
+ * when it is absent; `confidence` never. `probabilities`: another decision
+ * model, whose `confidence` has no known meaning: only its probabilities count.
  */
-export function confidenceSourceOf(name: RouteName): "jev" | "x_jev" {
-  return name === "laya" ? "x_jev" : "jev";
+export function confidenceSourceOf(name: RouteName, model?: string): "jev" | "x_jev" | "probabilities" {
+  if (name === "laya") return "x_jev";
+  return name === "typesafe" || name === "gateway" || isJev(model) ? "jev" : "probabilities";
 }
 
 /**
@@ -87,6 +112,8 @@ export function confidenceSourceOf(name: RouteName): "jev" | "x_jev" {
  * route can only go there. `model` is null where the id is not known and has
  * to be given in JEV_ROUTER_JEV_MODEL.
  */
+const OPENROUTER_DECISIONS = "https://openrouter.ai/api/alpha/decisions";
+
 const FIXED: Record<"openrouter" | "commandcode" | "opencode", { endpoint: string; model: string | null; keyEnv: keyof ProviderEnv }> = {
   // Jev 1.14 on OpenRouter: https://openrouter.ai/typesafe/jev-1.14
   openrouter: { endpoint: "https://openrouter.ai/api/v1/systemone", model: "typesafe/jev-1.14", keyEnv: "OPENROUTER_API_KEY" },
@@ -233,7 +260,15 @@ function build(name: RouteName, env: ProviderEnv): ProviderResult {
       if (!key) return { ok: false, reason: `JEV_ROUTER_PROVIDER=${name} but ${String(route.keyEnv)} is not set` };
       const model = pinned || route.model;
       if (!model) return { ok: false, reason: `${name} needs JEV_ROUTER_JEV_MODEL: its model id for Jev is not known to the router` };
-      return { ok: true, name, endpoint: route.endpoint, model, apiKey: key };
+      const decisions = name === "openrouter" && (env.JEV_ROUTER_API ?? "").trim().toLowerCase() === "decisions";
+      return {
+        ok: true,
+        name,
+        endpoint: decisions ? OPENROUTER_DECISIONS : route.endpoint,
+        model,
+        apiKey: key,
+        ...(decisions ? { api: "decisions" as const } : {}),
+      };
     }
   }
 }

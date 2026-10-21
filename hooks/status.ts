@@ -113,10 +113,10 @@ export type AgentTag = {
  * who to name on the route line when it is not Jev. The arguments after
  * `offered` in `decisionOf`.
  */
-function answeredVia(result: { via?: Parameters<typeof labelOf>[0] }): ["jev" | "x_jev", string | undefined] {
+function answeredVia(result: { via?: Parameters<typeof labelOf>[0]; model?: string }): ["jev" | "x_jev" | "probabilities", string | undefined] {
   if (result.via === undefined) return ["jev", undefined];
-  const label = labelOf(result.via);
-  return [confidenceSourceOf(result.via), label === "Jev" ? undefined : label];
+  const label = labelOf(result.via, result.model);
+  return [confidenceSourceOf(result.via, result.model), label === "Jev" ? undefined : label];
 }
 
 /** Percent, rounded, for a confidence. */

@@ -163,7 +163,7 @@ export type HttpResponseLike = {
  * session can say why a turn went unrouted instead of going quiet.
  */
 export type JevResult =
-  | { ok: true; answers: unknown; ms: number; via?: RouteName }
+  | { ok: true; answers: unknown; ms: number; via?: RouteName; model?: string }
   | { ok: false; reason: string; ms: number };
 
 export type AskArgs = {
@@ -366,7 +366,7 @@ export async function askJev(args: AskArgs): Promise<JevResult> {
     if (typeof parsed !== "object" || parsed === null || !parsed.answers) {
       return { ok: false, reason: "response carried no answers", ms: since() };
     }
-    return { ok: true, answers: parsed.answers, ms: since(), via: provider.name };
+    return { ok: true, answers: parsed.answers, ms: since(), via: provider.name, model: provider.model };
   } catch {
     return { ok: false, reason: "response was not JSON", ms: since() };
   }

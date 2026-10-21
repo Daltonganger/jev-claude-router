@@ -26,6 +26,12 @@
   tried in order (`laya,openrouter`) that shares one time budget. Each route has its
   own key and a fixed address; `LAYA_BASE_URL` is your own server (https, any host).
   OpenRouter, Command Code and OpenCode are chosen only by name.
+- **OpenRouter's Decisions API** (`JEV_ROUTER_API=decisions`) for the `openrouter`
+  route, which also serves other decision models (`JEV_ROUTER_JEV_MODEL`). A model
+  that is not Jev is read for its probabilities only and named on the route line.
+- **`scripts/bench`** compares decision models on your own labelled prompts:
+  extract the prompts you typed, label them, and score each model on tier
+  accuracy, too low or too high, calibration, the confidence bar, latency and cost.
 - **Laya's confidence is read as Jev's scale.** Laya's own `confidence` means
   something else, so its `x_jev_confidence` is used, and the probabilities when it is
   absent. The route line names the answerer (`Laya 85%`).

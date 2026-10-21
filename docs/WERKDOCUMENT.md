@@ -171,6 +171,29 @@ Gevolg voor de plugin: `holdsSonnetEffort` houdt een effort-wijziging op Sonnet 
 cache te sparen; dat is gemeten op Sonnet 5 en lijkt voor Sonnet 5.5 niet nodig. Dat aanpassen
 doen we pas na een meting via de plugin zelf (stap 2 hieronder).
 
+**Via de echte plugin** (2026-10-21, Claude Code 2.1.306, standaard stickiness aan, plugin geladen met
+`--plugin-dir` en een stand-in voor Jev, `scripts/probe-plugin-effort.sh`): de plugin stuurt de
+effort die de routeregel noemt, en de cache blijft staan.
+
+| Model | Effort die de plugin stuurde | Gelezen | Geschreven |
+| --- | --- | --- | --- |
+| Haiku 5.5 | medium → xhigh | 17.670 | 291 |
+| Haiku 5.5 | xhigh → low | 18.444 | 245 |
+| Haiku 5.5 | low → max | 18.689 | 150 |
+| Sonnet 5.5 | medium → xhigh | 16.562 | 155 |
+| Sonnet 5.5 | xhigh → low | 17.152 | 273 |
+| Sonnet 5.5 | low → max | 17.425 | 128 |
+
+Ook hier las de aanroep direct na de eerste `--resume` soms 0 en schreef hij de hele prompt, bij gelijke
+effort; geen effort-effect. Conclusie: voor Haiku 5.5 en Sonnet 5.5 kost een effort-wijziging via de
+plugin de cache niet. `holdsSonnetEffort` (gemeten op Sonnet 5) houdt zo'n wijziging vast zonder dat er
+een cache te sparen valt; dat kan voor Sonnet 5.5 uit. Nog niet gedaan.
+
+Bij deze meting bleek ook dat de plugin in Claude Code 2.1.306 niet laadde: `claude plugin validate`
+weigerde `register.ts`, omdat de lader van catalogus en modellijst `$.store` als waarde doorgaf (de
+engine staat alleen `$.store.get(…)`-aanroepen toe). Dat is hersteld, en een test bewaakt het. De
+unit-tests hadden dit niet gezien; `claude plugin validate .` hoort bij elke oplevering.
+
 Wat nog rest:
 1. `ANTHROPIC_API_KEY=… npm run measure-effort-cache` (`scripts/measure-effort-cache.mjs`, een
    paar cent) meet op de API zelf de top-level en de per-bericht-variant naast elkaar. Alleen

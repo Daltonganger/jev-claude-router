@@ -35,6 +35,9 @@
 
 ### Fixes
 
+- **The plugin loads again.** The catalog and model-list loaders passed `$.store`
+  as a value, which the engine's loader rejects (`claude plugin validate` fails and
+  nothing is routed). They call it instead, and a test keeps it that way.
 - **Sonnet 5.5's cache reads are $0.10, not $0.20** per million tokens, as the
   pricing page lists them (Sonnet 5's stay at $0.20).
 

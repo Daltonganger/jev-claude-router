@@ -2,6 +2,7 @@ import type { On } from "claude-code";
 
 import {
   askJev,
+  askJevChain,
   timeoutOf,
   type HttpInitLike,
   type HttpResponseLike,
@@ -25,6 +26,14 @@ import {
   upgradeMaxOf,
   offeredTiers,
   overrideAllowedOf,
+  PLAN_NOTES,
+  barsOf,
+  confidenceShareOf,
+  planExclusions,
+  planOf,
+  setEffortSupport,
+  setLadderModels,
+  MODEL_OF,
   parseOverride,
   sessionDecision,
   stickyOf,
@@ -33,12 +42,35 @@ import {
   DEFAULT_CEILING,
   EFFORTS,
   TIERS,
+  type Bars,
   type Ceiling,
   type Decision,
   type Effort,
   type Tier,
 } from "./policy.ts";
-import { tierOfModel, baseModel, sameModelAs, ttlOf, usageCost, type Ttl } from "./pricing.ts";
+import {
+  tierOfModel,
+  baseModel,
+  priceOfModel,
+  sameModelAs,
+  setOverlay,
+  setSyncedWindows,
+  ttlOf,
+  usageCost,
+  type Ttl,
+} from "./pricing.ts";
+import { adoptModels, loadModels, modelsLine, type Adoption, type ModelInfo, type ModelsResult } from "./models.ts";
+import {
+  catalogLine,
+  catalogOnOf,
+  catalogTtlOf,
+  catalogUrlOf,
+  loadCatalog,
+  overlayOf,
+  type Catalog,
+  type CatalogStore,
+  type LoadResult,
+} from "./catalog.ts";
 import {
   pack,
   SNAPSHOT_PREFIX,
@@ -51,7 +83,7 @@ import {
   type Overridable,
   type State,
 } from "./persist.ts";
-import { providerOf, type ProviderResult } from "./provider.ts";
+import { providersOf, type ProviderOk, type ProviderResult } from "./provider.ts";
 import {
   compactOnOf,
   compactTimeoutOf,
@@ -100,6 +132,7 @@ type Engine = {
     fetch: (url: string, init?: HttpInitLike) => Promise<HttpResponseLike>;
   };
   clock: { sleep: (ms: number, options?: { signal?: AbortSignal }) => Promise<unknown> };
+  store: CatalogStore;
 };
 
 /** The stamp of the copy that holds a session, from its owner record, or null. */
@@ -306,10 +339,14 @@ const MID_TURN: ReadonlySet<string> = new Set([
  */
 type Settings = {
   provider: ProviderResult;
+  /** Every provider to try, in order; empty when none could be set up (`provider` then says why). */
+  providers: readonly ProviderOk[];
   timeoutMs: number;
   offered: readonly Tier[];
   excluded: readonly Tier[];
   sticky: number | null;
+  /** Bars for particular decision models (env, then the catalog's), in place of `sticky` for the one that answered. */
+  bars: Bars;
   ceiling: Ceiling;
   ttl: Ttl;
   allowOverride: boolean;
@@ -321,7 +358,132 @@ type Settings = {
   compactOn: boolean;
   compactTimeoutMs: number;
   compactMinReduction: number;
+  /** `JEV_ROUTER_PLAN`: pro, max, api, or whatever was set; null when unset. */
+  plan: string | null;
+  /** The tiers the plan leaves out; already part of `excluded` at the start of the session. */
+  planExcluded: readonly Tier[];
+  /** What the plan means for them: the catalog's word, else the built-in note. */
+  planNote: string | null;
+  /** The catalog: what has come in so far, and whether it is still on its way. */
+  catalog: { result: LoadResult | null; loading: boolean };
+  /** The model list: what it found, what the ladder took from it, and why it was not asked. */
+  models: { result: ModelsResult | null; adoption: Adoption | null; state: "loading" | "no-key" | "off" | "ready" };
 };
+
+/**
+ * How long a session start waits for the catalog. A saved copy in date answers
+ * at once; a fetch that takes longer carries on in the background, is saved
+ * for the next session, and applies when it lands. Never a turn waiting on it.
+ */
+export const CATALOG_WAIT_MS = 800;
+
+/**
+ * Starts the model list load and waits for it at most `CATALOG_WAIT_MS`. A
+ * list that comes in later is saved for the next session and changes nothing
+ * in this one: a model switched under a running session costs its cache.
+ */
+async function startModels(
+  $: Engine,
+  state: Settings["models"],
+  raw: { off: string | undefined; key: string | undefined },
+): Promise<ModelInfo[] | null> {
+  if (!catalogOnOf(raw.off)) {
+    state.state = "off";
+    return null;
+  }
+  // A key with a space or line break in it cannot go in a header.
+  const key = (raw.key ?? "").trim();
+  if (key === "" || !/^[\x21-\x7e]+$/.test(key)) {
+    state.state = "no-key";
+    return null;
+  }
+  state.state = "loading";
+  const loading = loadModels({
+    fetch: (u, init) => $.http.fetch(u, init),
+    sleep: (ms, options) => $.clock.sleep(ms, options),
+    // Called, never passed: the engine rejects a module that uses a noun of `$` as a value.
+    store: { get: (key) => $.store.get(key), set: (key, value) => $.store.set(key, value) },
+    apiKey: key,
+  }).catch((): ModelsResult => ({ models: null, source: "none", notes: ["models: failed to load"] }));
+  const timer = new AbortController();
+  const waited = await Promise.race([
+    loading,
+    Promise.resolve($.clock.sleep(CATALOG_WAIT_MS, { signal: timer.signal })).then(
+      () => null,
+      () => new Promise<never>(() => {}),
+    ),
+  ]);
+  timer.abort();
+  if (waited === null) return null;
+  state.result = waited;
+  state.state = "ready";
+  return waited.models;
+}
+
+/**
+ * Puts the catalog and the model list into effect, in an order that lets each
+ * use the other: prices by id first, so the list can tell which newer models
+ * are priced; then the ladder's models, windows and efforts from the list;
+ * then the catalog again, so the ladder's prices follow the models it now has.
+ */
+function applySync(catalog: Catalog | null, models: ModelInfo[] | null, state: Settings["models"]): void {
+  setLadderModels(null);
+  setSyncedWindows(null);
+  setEffortSupport(null);
+  setOverlay(catalog === null ? null : overlayOf(catalog));
+  if (models !== null) {
+    const adoption = adoptModels(models, { ...MODEL_OF }, (id) => priceOfModel(id) !== null);
+    state.adoption = adoption;
+    setLadderModels(adoption.models);
+    setSyncedWindows(adoption.windows);
+    setEffortSupport(adoption.efforts);
+    if (catalog !== null) setOverlay(overlayOf(catalog));
+  }
+}
+
+/**
+ * Starts the catalog load and waits for it at most `CATALOG_WAIT_MS`. Top
+ * level, like `seedSettings`, because it takes `$`. Applies the catalog to
+ * the pricing functions as soon as it is in, whenever that is.
+ */
+async function startCatalog(
+  $: Engine,
+  state: Settings["catalog"],
+  raw: { off: string | undefined; url: string | undefined; allowCustom: string | undefined; ttl: string | undefined },
+): Promise<Catalog | null> {
+  if (!catalogOnOf(raw.off)) return null;
+  const url = catalogUrlOf(raw.url, raw.allowCustom);
+  if (!url.ok) {
+    state.result = { catalog: null, source: "none", notes: [url.reason] };
+    return null;
+  }
+  state.loading = true;
+  const loading = loadCatalog({
+    fetch: (u, init) => $.http.fetch(u, init),
+    sleep: (ms, options) => $.clock.sleep(ms, options),
+    // Called, never passed: the engine rejects a module that uses a noun of `$` as a value.
+    store: { get: (key) => $.store.get(key), set: (key, value) => $.store.set(key, value) },
+    url: url.url,
+    ttlMs: catalogTtlOf(raw.ttl),
+  })
+    .catch((): LoadResult => ({ catalog: null, source: "none", notes: ["catalog: failed to load"] }))
+    .then((result) => {
+      state.result = result;
+      state.loading = false;
+      if (result.catalog !== null) setOverlay(overlayOf(result.catalog));
+      return result;
+    });
+  const timer = new AbortController();
+  const waited = await Promise.race([
+    loading,
+    Promise.resolve($.clock.sleep(CATALOG_WAIT_MS, { signal: timer.signal })).then(
+      () => null,
+      () => new Promise<never>(() => {}),
+    ),
+  ]);
+  timer.abort();
+  return waited?.catalog ?? null;
+}
 
 /**
  * Reads the settings from the environment on first use. A top-level
@@ -338,24 +500,57 @@ async function seedSettings(
   // Normalized together: JEV_ROUTER_EXCLUDE naming every tier falls back to
   // the full ladder in `offered`, and `excluded` must agree with that or
   // `/jev` can end up saying a tier is both offered and excluded.
-  const tiers = tierFilter(excludedTiers(await $.env.get("JEV_ROUTER_EXCLUDE")));
-  return {
-    provider: providerOf({
-      TYPESAFE_API_KEY: await $.env.get("TYPESAFE_API_KEY"),
-      AI_GATEWAY_API_KEY: await $.env.get("AI_GATEWAY_API_KEY"),
-      JEV_ROUTER_PROVIDER: await $.env.get("JEV_ROUTER_PROVIDER"),
-      TYPESAFE_BASE_URL: await $.env.get("TYPESAFE_BASE_URL"),
-      JEV_ROUTER_ALLOW_CUSTOM_BASE: await $.env.get(
-        "JEV_ROUTER_ALLOW_CUSTOM_BASE",
-      ),
-      JEV_ROUTER_JEV_MODEL: await $.env.get("JEV_ROUTER_JEV_MODEL"),
+  const catalogState: Settings["catalog"] = { result: null, loading: false };
+  const modelsState: Settings["models"] = { result: null, adoption: null, state: "off" };
+  // Both start at once and share the wait.
+  const [catalog, models] = await Promise.all([
+    startCatalog($, catalogState, {
+      off: await $.env.get("JEV_ROUTER_CATALOG"),
+      url: await $.env.get("JEV_ROUTER_CATALOG_URL"),
+      allowCustom: await $.env.get("JEV_ROUTER_ALLOW_CUSTOM_CATALOG"),
+      ttl: await $.env.get("JEV_ROUTER_CATALOG_TTL_HOURS"),
     }),
+    startModels($, modelsState, {
+      off: await $.env.get("JEV_ROUTER_MODEL_SYNC"),
+      key: await $.env.get("ANTHROPIC_API_KEY"),
+    }),
+  ]);
+  applySync(catalog, models, modelsState);
+  const plan = planOf(await $.env.get("JEV_ROUTER_PLAN"));
+  const planExcluded = planExclusions(plan, plan === null ? undefined : catalog?.plans[plan]?.excludeLines);
+  const tiers = tierFilter(
+    new Set([...excludedTiers(await $.env.get("JEV_ROUTER_EXCLUDE")), ...planExcluded]),
+  );
+  const routes = providersOf({
+    TYPESAFE_API_KEY: await $.env.get("TYPESAFE_API_KEY"),
+    AI_GATEWAY_API_KEY: await $.env.get("AI_GATEWAY_API_KEY"),
+    JEV_ROUTER_PROVIDER: await $.env.get("JEV_ROUTER_PROVIDER"),
+    TYPESAFE_BASE_URL: await $.env.get("TYPESAFE_BASE_URL"),
+    JEV_ROUTER_ALLOW_CUSTOM_BASE: await $.env.get("JEV_ROUTER_ALLOW_CUSTOM_BASE"),
+    JEV_ROUTER_JEV_MODEL: await $.env.get("JEV_ROUTER_JEV_MODEL"),
+    JEV_ROUTER_API: await $.env.get("JEV_ROUTER_API"),
+    OPENROUTER_API_KEY: await $.env.get("OPENROUTER_API_KEY"),
+    COMMANDCODE_API_KEY: await $.env.get("COMMANDCODE_API_KEY"),
+    OPENCODE_API_KEY: await $.env.get("OPENCODE_API_KEY"),
+    LAYA_BASE_URL: await $.env.get("LAYA_BASE_URL"),
+    LAYA_API_KEY: await $.env.get("LAYA_API_KEY"),
+    LAYA_MODEL: await $.env.get("LAYA_MODEL"),
+  });
+  return {
+    provider: routes.ok ? routes.providers[0]! : routes,
+    providers: routes.ok ? routes.providers : [],
     timeoutMs: timeoutOf(await $.env.get("JEV_ROUTER_TIMEOUT_MS")),
     offered: tiers.offered,
     excluded: tiers.excluded,
     sticky: stickyOf(await $.env.get("JEV_ROUTER_STICKY"))
       ? thresholdOf(await $.env.get("JEV_ROUTER_STICKY_CONFIDENCE"))
       : null,
+    // Per model: the environment's, then the catalog's. A bar you set for every decider yourself
+    // keeps the catalog's recommendations out; one you name for a model is always yours.
+    bars: {
+      ...(confidenceShareOf(await $.env.get("JEV_ROUTER_STICKY_CONFIDENCE")) === null ? (catalog?.bars ?? {}) : {}),
+      ...barsOf(await $.env.get("JEV_ROUTER_DECIDER_BARS")),
+    },
     ceiling: ceilingOf(await $.env.get("JEV_ROUTER_CEILING")),
     ttl: ttlOf(await $.env.get("JEV_ROUTER_CACHE_TTL")),
     allowOverride: overrideAllowedOf(
@@ -373,6 +568,11 @@ async function seedSettings(
     compactMinReduction: minReductionOf(
       await $.env.get("JEV_ROUTER_COMPACT_MIN_REDUCTION"),
     ),
+    plan,
+    planExcluded,
+    planNote: plan === null ? null : (catalog?.plans[plan]?.note ?? PLAN_NOTES[plan] ?? null),
+    catalog: catalogState,
+    models: modelsState,
   };
 }
 
@@ -390,16 +590,19 @@ async function classify(
   signal?: AbortSignal,
   source: StateSource = "prompt",
 ) {
-  return askJev({
-    fetch: (url, init) => $.http.fetch(url, init),
-    sleep: (ms, options) => $.clock.sleep(ms, options),
-    provider: settings.provider,
+  const common = {
+    fetch: (url: string, init?: HttpInitLike) => $.http.fetch(url, init),
+    sleep: (ms: number, options?: { signal?: AbortSignal }) => $.clock.sleep(ms, options),
     state: text,
     offered,
     source,
     timeoutMs: settings.timeoutMs,
     signal,
-  });
+  };
+  // One provider asks as before; several share the budget, one after another.
+  return settings.providers.length > 1
+    ? askJevChain({ ...common, providers: settings.providers })
+    : askJev({ ...common, provider: settings.provider });
 }
 
 /**
@@ -1381,7 +1584,7 @@ export function register(on: On) {
     ) {
       const result = await pruneTranscript({
         messages: transcript,
-        provider: settings.provider,
+        provider: settings.providers.find((p) => p.name === "typesafe") ?? settings.provider,
         fetch: (url, init) => $.http.fetch(url, init),
         sleep: (ms, options) => $.clock.sleep(ms, options),
         timeoutMs: settings.compactTimeoutMs,
@@ -1519,13 +1722,14 @@ export function register(on: On) {
         return { text: unknownCommandReply(sub, false) };
       }
       // Only TypeSafe direct answers the yes/no questions scoring asks.
-      const gatewayOnly = settings.provider.ok && settings.provider.name !== "typesafe";
+      const gatewayOnly = settings.provider.ok && !settings.providers.some((p) => p.name === "typesafe");
+      const routeName = settings.provider.ok && settings.provider.name !== "gateway" ? `the ${settings.provider.name} route` : "the gateway";
       return {
         text:
           `compaction by Jev ${settings.compactOn ? "on" : "off"}` +
           (settings.compactOn
             ? gatewayOnly
-              ? ", but the gateway cannot score tool calls, so the engine's own summary runs. Routing through TypeSafe direct (TYPESAFE_API_KEY, with JEV_ROUTER_PROVIDER unset or typesafe) enables it."
+              ? `, but ${routeName} cannot score tool calls, so the engine's own summary runs. Routing through TypeSafe direct (TYPESAFE_API_KEY, with JEV_ROUTER_PROVIDER unset or naming typesafe) enables it.`
               : ": at each compaction, Jev scores every tool call and the stale ones are dropped or cut; the conversation stays verbatim. /jev compact off restores the engine's summary."
             : ": the engine's own summary runs. /jev compact on to prune with Jev instead."),
       };
@@ -1596,8 +1800,10 @@ export function register(on: On) {
         enabled,
         surface,
         provider: settings.provider,
+        providers: settings.providers.map((p) => p.name),
         timeoutMs: settings.timeoutMs,
         sticky: settings.sticky,
+        ...(overridden.has("sticky") ? {} : { bars: settings.bars }),
         upgradeMax: settings.upgradeMax,
         price: settings.priceCheck,
         ceiling: settings.ceiling,
@@ -1613,6 +1819,11 @@ export function register(on: On) {
         announce,
         attempts,
         spent,
+        plan: settings.plan,
+        planExcluded: settings.planExcluded,
+        planNote: settings.planNote,
+        catalog: catalogLine(settings.catalog.result, settings.catalog.loading),
+        models: modelsLine(settings.models.result, settings.models.adoption, settings.models.state),
       }),
     };
   });
@@ -1838,6 +2049,8 @@ export function register(on: On) {
         offered,
         {
           sticky: settings.sticky,
+          // `/jev sticky` is the person's word for every decider.
+          ...(overridden.has("sticky") ? {} : { bars: settings.bars }),
           running,
           forced,
           ceiling,

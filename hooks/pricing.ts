@@ -4,7 +4,7 @@
  * Prices are Anthropic's public list, per million tokens, read from
  * platform.claude.com/docs/en/about-claude/pricing on PRICE_DATE. A cache
  * read is a tenth of input on most models, a fortieth on Fable 5.1 and a
- * twentieth on Opus 5.5; a cache write is 1.25× input for the five-minute
+ * twentieth on Opus 5.5 and Sonnet 5.5; a cache write is 1.25× input for the five-minute
  * cache and 2× for the one-hour one. Claude Code writes the one-hour cache
  * (every one of 18,204 writes in a week of this machine's transcripts), so
  * that is the default here.
@@ -14,7 +14,7 @@
 
 import type { Tier } from "./policy.ts";
 
-export const PRICE_DATE = "2026-09-23";
+export const PRICE_DATE = "2026-10-21";
 
 /** Dollars per million tokens. */
 export type Price = {
@@ -23,14 +23,65 @@ export type Price = {
   write1h: number;
   read: number;
   output: number;
+  /**
+   * Haiku 5.5 is priced by the length of a request's prompt (all its input
+   * tokens, cache reads and writes included): past a threshold the whole
+   * request pays the tier's prices. Each request is priced on its own.
+   */
+  tiers?: readonly PriceTier[];
 };
+
+/** From more than `abovePromptTokens` in one request's prompt, `price` replaces the base. */
+export type PriceTier = { abovePromptTokens: number; price: Omit<Price, "tiers"> };
+
+/** The price a request with `promptTokens` of prompt pays: the highest tier it is over, else the base. */
+export function priceAt(price: Price, promptTokens: number): Price {
+  let at: Price = price;
+  for (const tier of price.tiers ?? [])
+    if (promptTokens > tier.abovePromptTokens) at = { ...tier.price };
+  return at;
+}
 
 export type Ttl = "5m" | "1h";
 
+/**
+ * What the catalog says in place of the built-in tables: price by model id,
+ * and the price and window of each tier's model. Set once the catalog is in;
+ * absent, everything below answers from the tables in this file.
+ */
+export type Overlay = {
+  models: ReadonlyMap<string, Price>;
+  ladder: Partial<Record<Tier, Price>>;
+  windows: Partial<Record<Tier, number>>;
+};
+
+let overlay: Overlay | null = null;
+
+export function setOverlay(next: Overlay | null): void {
+  overlay = next;
+}
+
+/** The price of the model a tier runs: the catalog's when it has one, else the built-in. */
+export function ladderPrice(tier: Tier): Price {
+  return overlay?.ladder[tier] ?? PRICE[tier];
+}
+
 /** The ladder's models. */
 export const PRICE: Record<Tier, Price> = {
-  haiku: { input: 1, write5m: 1.25, write1h: 2, read: 0.1, output: 5 },
-  sonnet: { input: 2, write5m: 2.5, write1h: 4, read: 0.2, output: 10 },
+  haiku: {
+    input: 0.1,
+    write5m: 0.125,
+    write1h: 0.2,
+    read: 0.01,
+    output: 0.5,
+    tiers: [
+      {
+        abovePromptTokens: 100_000,
+        price: { input: 0.5, write5m: 0.625, write1h: 1, read: 0.05, output: 2.5 },
+      },
+    ],
+  },
+  sonnet: { input: 2, write5m: 2.5, write1h: 4, read: 0.1, output: 10 },
   opus: { input: 4, write5m: 5, write1h: 8, read: 0.2, output: 20 },
   fable: { input: 10, write5m: 12.5, write1h: 20, read: 0.25, output: 50 },
 };
@@ -40,6 +91,9 @@ export const PRICE: Record<Tier, Price> = {
  * turn's cost is still right. Matched by prefix of the id the API reports.
  */
 const OPUS_4_0: Price = { input: 15, write5m: 18.75, write1h: 30, read: 1.5, output: 75 };
+const HAIKU_4_5: Price = { input: 1, write5m: 1.25, write1h: 2, read: 0.1, output: 5 };
+/** Sonnet 5 reads its cache at a tenth of input; Sonnet 5.5 at a twentieth. */
+const SONNET_5_0: Price = { input: 2, write5m: 2.5, write1h: 4, read: 0.2, output: 10 };
 /** Fable 5 and Mythos 5: Fable 5.1's price, but four times its cache read. */
 const FABLE_5_0: Price = { ...PRICE.fable, read: 1 };
 
@@ -52,9 +106,13 @@ const OTHER_PRICE: readonly (readonly [string, Price])[] = [
   ["claude-opus-4-1", OPUS_4_0],
   ["claude-opus-4-2025", OPUS_4_0],
   ["claude-opus-4", { input: 5, write5m: 6.25, write1h: 10, read: 0.5, output: 25 }],
-  ["claude-sonnet-5", PRICE.sonnet],
+  ["claude-sonnet-5-5", PRICE.sonnet],
+  ["claude-sonnet-5", SONNET_5_0],
   ["claude-sonnet-4", { input: 3, write5m: 3.75, write1h: 6, read: 0.3, output: 15 }],
-  ["claude-haiku-4", PRICE.haiku],
+  // Only the version the page prices: a Haiku 5.x it does not list is no
+  // guess at 5.5's tiered price.
+  ["claude-haiku-5-5", PRICE.haiku],
+  ["claude-haiku-4", HAIKU_4_5],
   ["claude-fable-5-1", PRICE.fable],
   ["claude-mythos-5-1", PRICE.fable],
   ["claude-fable-5", FABLE_5_0],
@@ -78,6 +136,9 @@ export function priceOfModel(model: string): Price | null {
     .replace(/@\d{8}$/, "");
   // Bare, it is Opus 4.0 (Vertex's `claude-opus-4@date` comes to this).
   if (id === "claude-opus-4") return OPUS_4_0;
+  // The catalog names a model by its id; a dated spelling is the same model.
+  const listed = overlay?.models.get(id) ?? overlay?.models.get(id.replace(/-\d{8}$/, ""));
+  if (listed !== undefined) return listed;
   for (const [prefix, price] of OTHER_PRICE)
     if (id.startsWith(prefix)) return price;
   return null;
@@ -114,8 +175,13 @@ export function usageCost(
   usage: Tokens,
   ttl: Ttl = "1h",
 ): number | null {
-  const p = priceOfModel(model);
-  if (p === null) return null;
+  const base = priceOfModel(model);
+  if (base === null) return null;
+  // A request's prompt is everything it carried in, cached or not.
+  const p = priceAt(
+    base,
+    usage.input_tokens + usage.cache_creation_input_tokens + usage.cache_read_input_tokens,
+  );
   const write = ttl === "1h" ? p.write1h : p.write5m;
   return (
     (usage.input_tokens * p.input +
@@ -127,16 +193,17 @@ export function usageCost(
 }
 
 /**
- * The context window of each tier's model, in tokens: Haiku 4.5 takes 200K,
- * the rest 1M (platform.claude.com/docs/en/about-claude/models, 2026-09-23).
- * A request past it is refused with "Prompt is too long", and a week of
- * transcripts holds three of those, each right after a turn at 358k–605k
- * was routed to haiku. Nothing on the ladder is smaller than a session
- * with a `[1m]` model: the plain ids the router sends were answered at
- * 737k on fable and 344k on sonnet.
+ * The context window of each tier's model, in tokens: 1M on every model on
+ * the ladder (platform.claude.com/docs/en/about-claude/models/overview,
+ * 2026-10-21). Haiku 4.5 took 200K, and a week of transcripts held three
+ * "Prompt is too long" refusals, each right after a turn at 358k–605k was
+ * routed to it; Haiku 5.5 has the full window, though past 100K a request
+ * pays its higher prices (see `Price.tiers`). The plain ids the router sends
+ * were answered at 737k on fable and 344k on sonnet, so a session with a
+ * `[1m]` model is not larger than these.
  */
 export const WINDOW_TOKENS: Record<Tier, number> = {
-  haiku: 200_000,
+  haiku: 1_000_000,
   sonnet: 1_000_000,
   opus: 1_000_000,
   fable: 1_000_000,
@@ -147,7 +214,52 @@ const WINDOW_HEADROOM_TOKENS = 16_000;
 
 /** True when a turn carrying `contextTokens` can be sent to `tier` at all. */
 export function fitsWindow(tier: Tier, contextTokens: number): boolean {
-  return contextTokens + WINDOW_HEADROOM_TOKENS <= WINDOW_TOKENS[tier];
+  return contextTokens + WINDOW_HEADROOM_TOKENS <= windowOf(tier);
+}
+
+let syncedWindows: Partial<Record<Tier, number>> = {};
+
+/** The windows the model list reported, for the tiers it named; null forgets them. */
+export function setSyncedWindows(windows: Partial<Record<Tier, number>> | null): void {
+  syncedWindows = windows ?? {};
+}
+
+/** A tier's window: the catalog's when it has one, else the model list's, else the built-in. */
+export function windowOf(tier: Tier): number {
+  return overlay?.windows[tier] ?? syncedWindows[tier] ?? WINDOW_TOKENS[tier];
+}
+
+/**
+ * Whether changing effort between requests leaves the model's prompt cache
+ * alone. A model with per-message effort takes the change in a system message
+ * after the cached prefix; any other restarts the cache from the changed
+ * message on (platform.claude.com, "Effort" and "Prompt caching", 2026-10-21).
+ * Per-message effort exists on Fable 5.1, Opus 5.5, Opus 5, Sonnet 5.5 and
+ * Haiku 5.5 on the Claude API and Google Cloud, and on Fable 5.1, Mythos 5.1
+ * and Opus 5.5 on Amazon Bedrock. Measured through this plugin in Claude Code
+ * 2.1.306: Haiku 5.5 and Sonnet 5.5 keep the cache across effort changes.
+ * Sonnet 5 does not (measured 2026-09-22, and the docs list no per-message
+ * effort for it); an id the table does not know is assumed not to.
+ */
+export function effortKeepsCache(model: string): boolean {
+  if (typeof model !== "string") return false;
+  const bedrock = /^(?:[a-z]{2,}\.)*anthropic\./.test(model.toLowerCase());
+  const id = model
+    .toLowerCase()
+    .replace(/\[[^\]]*\]$/, "")
+    .replace(/^(?:[a-z]{2,}\.)*anthropic\./, "")
+    .replace(/-v\d+(?::\d+)?$/, "")
+    .replace(/@\d{8}$/, "")
+    .replace(/-\d{8}$/, "");
+  if (bedrock) return ["claude-fable-5-1", "claude-mythos-5-1", "claude-opus-5-5"].includes(id);
+  return [
+    "claude-fable-5-1",
+    "claude-mythos-5-1",
+    "claude-opus-5-5",
+    "claude-opus-5",
+    "claude-sonnet-5-5",
+    "claude-haiku-5-5",
+  ].includes(id);
 }
 
 /** `claude-opus-5-5[1m]` and `claude-opus-5-5` are one model: the suffix is the engine's. */
@@ -224,17 +336,18 @@ export function switchVerdict(
    * tier: a session on `claude-opus-5` reads its cache at $0.50, not the
    * $0.20 of the opus tier's `claude-opus-5-5`.
    */
-  fromPrice: Price = PRICE[from],
+  fromPrice: Price = ladderPrice(from),
   /** The running model's cache has expired: staying writes it too. */
   fromCold = false,
 ): SwitchVerdict {
   const write = (p: Price) => (ttl === "1h" ? p.write1h : p.write5m);
   const ctx = contextTokens / 1e6;
   const out = outputTokens / 1e6;
-  const stay =
-    ctx * (fromCold ? write(fromPrice) : fromPrice.read) + out * fromPrice.output;
-  const go =
-    ctx * write(PRICE[to]) + out * PRICE[to].output + ctx * write(fromPrice);
+  // The next request's prompt is the whole context, whichever tier it goes to.
+  const from_ = priceAt(fromPrice, contextTokens);
+  const to_ = priceAt(ladderPrice(to), contextTokens);
+  const stay = ctx * (fromCold ? write(from_) : from_.read) + out * from_.output;
+  const go = ctx * write(to_) + out * to_.output + ctx * write(from_);
   return { stay, go, hold: go >= stay };
 }
 
@@ -252,16 +365,17 @@ export function upgradeVerdict(
   outputTokens: number,
   limit: number,
   ttl: Ttl = "1h",
-  fromPrice: Price = PRICE[from],
+  fromPrice: Price = ladderPrice(from),
   /** The running model's cache has expired: staying writes it too. */
   fromCold = false,
 ): SwitchVerdict {
   const write = (p: Price) => (ttl === "1h" ? p.write1h : p.write5m);
   const ctx = contextTokens / 1e6;
   const out = outputTokens / 1e6;
-  const stay =
-    ctx * (fromCold ? write(fromPrice) : fromPrice.read) + out * fromPrice.output;
-  const go = ctx * write(PRICE[to]) + out * PRICE[to].output;
+  const from_ = priceAt(fromPrice, contextTokens);
+  const to_ = priceAt(ladderPrice(to), contextTokens);
+  const stay = ctx * (fromCold ? write(from_) : from_.read) + out * from_.output;
+  const go = ctx * write(to_) + out * to_.output;
   return { stay, go, hold: go - stay > limit, limit };
 }
 
@@ -276,7 +390,7 @@ export function breakEvenTokens(
   outputTokens: number,
   ttl: Ttl = "1h",
   /** The running model's own price, as in `switchVerdict`. */
-  fromPrice: Price = PRICE[from],
+  fromPrice: Price = ladderPrice(from),
   /** The running model's cache has expired, as in `switchVerdict`. */
   fromCold = false,
 ): number {
@@ -284,10 +398,25 @@ export function breakEvenTokens(
   // stay = ctx·read(from) + out·output(from); go = ctx·(write(to)+write(from)) + out·output(to)
   // go < stay  ⇔  ctx·(write(to)+write(from)−read(from)) < out·(output(from)−output(to))
   // Cold, staying writes too: read(from) becomes write(from).
-  const perCtx = write(PRICE[to]) + write(fromPrice) - (fromCold ? write(fromPrice) : fromPrice.read);
-  const perOut = fromPrice.output - PRICE[to].output;
-  if (perOut <= 0 || perCtx <= 0) return 0;
-  return Math.floor((outputTokens * perOut) / perCtx);
+  // A tiered price changes with the context, so the line is solved region by
+  // region between the tiers' thresholds, and the largest context that pays wins.
+  const edges = [
+    ...new Set([0, ...(fromPrice.tiers ?? []).map((t) => t.abovePromptTokens), ...(ladderPrice(to).tiers ?? []).map((t) => t.abovePromptTokens)]),
+  ].sort((x, y) => x - y);
+  let best = 0;
+  edges.forEach((lo, i) => {
+    const hi = edges[i + 1] ?? Infinity;
+    // Prices that apply from just past `lo` (a tier starts above its threshold).
+    const f = priceAt(fromPrice, lo + 1);
+    const t = priceAt(ladderPrice(to), lo + 1);
+    const perCtx = write(t) + write(f) - (fromCold ? write(f) : f.read);
+    const perOut = f.output - t.output;
+    if (perOut <= 0 || perCtx <= 0) return;
+    const x = Math.floor((outputTokens * perOut) / perCtx);
+    // Pays up to x; the region caps it at hi, and it counts only if some context in it pays.
+    if (x > lo) best = Math.max(best, Math.min(x, hi));
+  });
+  return best;
 }
 
 /** `$4.41`, `$0.36`, `$0.024`, `$0.0035`: enough places to show a small turn. */

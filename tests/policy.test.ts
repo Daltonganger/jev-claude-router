@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
-import { describe, test } from "node:test";
+import { afterEach, describe, test } from "node:test";
 
 import {
   asAsked,
+  barFor,
+  barsOf,
   capTo,
   ceilingAt,
   ceilingOf,
@@ -23,6 +25,12 @@ import {
   MODEL_OF,
   offeredTiers,
   parseOverride,
+  PLAN_EXCLUDES,
+  planExclusions,
+  planOf,
+  setEffortSupport,
+  setLadderModels,
+  supportedEffort,
   stickyDecision,
   stickyOf,
   SUBAGENT_CONFIDENCE,
@@ -301,7 +309,7 @@ describe("a tier named in the prompt", () => {
 
   test("a model id names its tier too", () => {
     assert.equal(parseOverride("use claude-opus-5-5"), "opus");
-    assert.equal(parseOverride("switch to claude-haiku-4-5"), "haiku");
+    assert.equal(parseOverride("switch to claude-haiku-5-5"), "haiku");
   });
 
   test("case does not matter", () => {
@@ -455,6 +463,8 @@ describe("effort on Sonnet", () => {
     confidence: 0.9,
     effortConfidence,
   });
+  /** The same decision on Sonnet 5, whose effort change restarts the cache. */
+  const sonnet5 = (d: Decision): Decision => ({ ...d, model: "claude-sonnet-5" });
 
   test("the effort answer’s own confidence is read, not the tier’s", () => {
     const d = decisionOf({
@@ -472,14 +482,22 @@ describe("effort on Sonnet", () => {
 
   test("a shaky effort change while staying on Sonnet is held", () => {
     assert.equal(
-      holdsSonnetEffort(on("sonnet", "high", 0.49), on("sonnet", "low", 0.9), 0.75),
+      holdsSonnetEffort(on("sonnet", "high", 0.49), sonnet5(on("sonnet", "low", 0.9)), 0.75),
       true,
     );
   });
 
+  test("on Sonnet 5.5 the same change is not held: its effort change keeps the cache", () => {
+    assert.equal(
+      holdsSonnetEffort(on("sonnet", "high", 0.49), on("sonnet", "low", 0.9), 0.75),
+      false,
+    );
+    assert.equal(on("sonnet", "low", 0.9).model, "claude-sonnet-5-5");
+  });
+
   test("held in both directions: a rise would ratchet a stretch upward", () => {
     assert.equal(
-      holdsSonnetEffort(on("sonnet", "low", 0.49), on("sonnet", "high", 0.9), 0.75),
+      holdsSonnetEffort(on("sonnet", "low", 0.49), sonnet5(on("sonnet", "high", 0.9)), 0.75),
       true,
     );
   });
@@ -846,7 +864,7 @@ describe("policy: audit regressions (2026-09-28)", () => {
 });
 
 describe("holdsSonnetEffort under a ceiling (2026-09-28)", () => {
-  const on = (effort: Effort, effortConfidence: number): Decision => ({ tier: "sonnet", model: "claude-sonnet-5-5", effort, confidence: 0.9, effortConfidence });
+  const on = (effort: Effort, effortConfidence: number): Decision => ({ tier: "sonnet", model: "claude-sonnet-5", effort, confidence: 0.9, effortConfidence });
   test("an effort the ceiling now cuts is not held: it changes either way", () => {
     const ceiling = { ...ceilingAt("max"), sonnet: "medium" as const };
     assert.equal(holdsSonnetEffort(on("low", 0.3), on("xhigh", 0.9), 0.75, ceiling), false);
@@ -979,5 +997,159 @@ describe("ownWords is linear on unclosed openings (2026-09-29)", () => {
     }
     assert.equal(ownWords("a <pasted_content id=1>use opus</pasted_content> b").includes("opus"), false);
     assert.equal(ownWords("a <pasted_contents>use opus").includes("opus"), true);
+  });
+});
+
+describe("plans", () => {
+  test("JEV_ROUTER_PLAN is read lowercase, and blank is no plan", () => {
+    assert.equal(planOf(undefined), null);
+    assert.equal(planOf("  "), null);
+    assert.equal(planOf(" Pro "), "pro");
+  });
+
+  test("the built-in table: pro leaves out fable, max and api leave out nothing", () => {
+    assert.deepEqual(planExclusions("pro"), ["fable"]);
+    assert.deepEqual(planExclusions("max"), []);
+    assert.deepEqual(planExclusions("api"), []);
+    assert.deepEqual(Object.keys(PLAN_EXCLUDES).sort(), ["api", "max", "pro"]);
+  });
+
+  test("no plan, or one nobody knows, leaves nothing out", () => {
+    assert.deepEqual(planExclusions(null), []);
+    assert.deepEqual(planExclusions("team"), []);
+  });
+
+  test("the catalog's lines replace the built-in ones, and only ladder tiers count", () => {
+    assert.deepEqual(planExclusions("pro", []), []);
+    assert.deepEqual(planExclusions("pro", ["fable", "opus"]), ["opus", "fable"]);
+    assert.deepEqual(planExclusions("pro", ["mythos", "Fable"]), []);
+    assert.deepEqual(planExclusions("team", ["fable"]), ["fable"]);
+  });
+});
+
+describe("models taken from the model list", () => {
+  afterEach(() => {
+    setLadderModels(null);
+    setEffortSupport(null);
+  });
+
+  test("a tier can be pointed at another model, and back", () => {
+    const was = MODEL_OF.opus;
+    setLadderModels({ opus: "claude-opus-6" });
+    assert.equal(MODEL_OF.opus, "claude-opus-6");
+    assert.equal(MODEL_OF.fable, "claude-fable-5-1", "the others stay");
+    setLadderModels(null);
+    assert.equal(MODEL_OF.opus, was);
+  });
+
+  test("an effort the model does not accept moves to the nearest it does", () => {
+    setEffortSupport({ sonnet: ["low", "medium", "high", "max"] });
+    assert.equal(supportedEffort("sonnet", "xhigh"), "high", "the highest below");
+    assert.equal(supportedEffort("sonnet", "max"), "max");
+    assert.equal(supportedEffort("opus", "xhigh"), "xhigh", "a tier the list did not describe takes any");
+    setEffortSupport({ haiku: ["high", "max"] });
+    assert.equal(supportedEffort("haiku", "low"), "high", "nothing below: the lowest above");
+    setEffortSupport({ haiku: [] });
+    assert.equal(supportedEffort("haiku", "low"), "low", "an empty list says nothing");
+  });
+
+  test("capTo applies the ceiling first, then the model's levels, and keeps what Jev asked", () => {
+    setEffortSupport({ sonnet: ["low", "medium", "high"] });
+    const d = { tier: "sonnet", model: MODEL_OF.sonnet, effort: "max", confidence: 1, effortConfidence: 1 } as const;
+    const capped = capTo(d, ceilingAt("xhigh"));
+    assert.equal(capped.effort, "high");
+    assert.equal(capped.cappedEffort, "max");
+    const fine = capTo({ ...d, effort: "medium" }, ceilingAt("xhigh"));
+    assert.equal(fine.effort, "medium");
+    assert.equal(fine.cappedEffort, undefined);
+  });
+});
+
+describe("decisionOf reads the confidence a route means", () => {
+  const laya = {
+    tier: { type: "choice", choice: "sonnet", confidence: 0.2, x_jev_confidence: 0.9, probabilities: { haiku: 0.02, sonnet: 0.95, opus: 0.02, fable: 0.01 } },
+    effort: { type: "score", score: 2, confidence: 0.1, x_jev_confidence: 0.8 },
+  };
+
+  test("Laya's own confidence is not Jev's: x_jev_confidence is read, for the tier and the effort", () => {
+    const d = decisionOf(laya, TIERS, "x_jev", "Laya");
+    assert.equal(d?.confidence, 0.9);
+    assert.equal(d?.effortConfidence, 0.8);
+    assert.equal(d?.decider, "Laya");
+  });
+
+  test("a Laya answer without it is derived from the probabilities, never from `confidence`", () => {
+    const { x_jev_confidence: _t, ...tier } = laya.tier;
+    const { x_jev_confidence: _e, ...effort } = laya.effort;
+    const d = decisionOf({ tier, effort }, TIERS, "x_jev");
+    assert.equal(d?.confidence, confidenceFrom({ haiku: 0.02, sonnet: 0.95, opus: 0.02, fable: 0.01 }, 4, "sonnet"));
+    assert.notEqual(d?.confidence, 0.2);
+    assert.equal(d?.effortConfidence, 0, "no x_jev_confidence on the effort: none, not 0.1");
+  });
+
+  test("Jev's answers are read as before, and x_jev_confidence is ignored there", () => {
+    const d = decisionOf(laya, TIERS);
+    assert.equal(d?.confidence, 0.2);
+    assert.equal(d?.effortConfidence, 0.1);
+    assert.equal(d?.decider, undefined);
+  });
+
+  test("a value outside 0..1 or not a number is clamped or ignored, as for Jev", () => {
+    const d = decisionOf({ tier: { type: "choice", choice: "sonnet", x_jev_confidence: 7 }, effort: { type: "score", score: 1, x_jev_confidence: "high" } }, TIERS, "x_jev");
+    assert.equal(d?.confidence, 1);
+    assert.equal(d?.effortConfidence, 0);
+  });
+
+  test("Laya's x_jev_confidence on two options is the share above half, rescaled: 0.8 → 0.6", () => {
+    const d = decisionOf({ tier: { type: "choice", choice: "haiku", probabilities: { haiku: 0.8, sonnet: 0.2 } } }, ["haiku", "sonnet"], "x_jev");
+    assert.ok(Math.abs((d?.confidence ?? 0) - 0.6) < 1e-9);
+  });
+});
+
+describe("decisionOf for another decision model (2026-10-21)", () => {
+  test("neither confidence field is read: the number comes from the probabilities", () => {
+    const answers = {
+      tier: { type: "choice", choice: "opus", confidence: 0.1, x_jev_confidence: 0.2, probabilities: { haiku: 0.01, sonnet: 0.02, opus: 0.96, fable: 0.01 } },
+      effort: { type: "score", score: 2, confidence: 0.05, probabilities: [0.02, 0.03, 0.9, 0.03, 0.02] },
+    };
+    const d = decisionOf(answers, TIERS, "probabilities", "pplx-decider-v1.2");
+    assert.ok(Math.abs((d?.confidence ?? 0) - (4 * 0.96 - 1) / 3) < 1e-9);
+    assert.ok(Math.abs((d?.effortConfidence ?? 0) - (5 * 0.9 - 1) / 4) < 1e-9);
+    assert.equal(d?.decider, "pplx-decider-v1.2");
+  });
+
+  test("score probabilities may come as an object over the levels", () => {
+    const d = decisionOf({ tier: { type: "choice", choice: "haiku", probabilities: { haiku: 1 } }, effort: { type: "score", score: 0, probabilities: { "0": 0.8, "1": 0.2 } } }, ["haiku"], "probabilities");
+    assert.ok(Math.abs((d?.effortConfidence ?? 0) - 0.6) < 1e-9);
+  });
+
+  test("with no probabilities there is no confidence to read, not a made-up one", () => {
+    const d = decisionOf({ tier: { type: "choice", choice: "opus", confidence: 0.99 }, effort: { type: "score", score: 2, confidence: 0.99 } }, TIERS, "probabilities");
+    assert.equal(d?.confidence, 0);
+    assert.equal(d?.effortConfidence, 0);
+  });
+});
+
+describe("confidence bars by decision model", () => {
+  test("a pair is a model, or a route, and a bar as any bar is written", () => {
+    const bars = barsOf("microsoft/microsoft-decision-1=0.85, laya=60%; Bad=1.5 ; =0.5 ; nobar ; x=0");
+    assert.deepEqual({ ...bars }, { "microsoft/microsoft-decision-1": 0.85, laya: 0.6 });
+    assert.deepEqual({ ...barsOf(undefined) }, {});
+    // A name that is also on every object is only ever found when it was set.
+    assert.equal(barFor({}, "constructor", "__proto__"), undefined);
+    assert.equal(barFor({ ...barsOf("") }, "toString", undefined), undefined);
+  });
+
+  test("the full model id wins, then the id without its prefix, then the route", () => {
+    const bars = barsOf("microsoft/microsoft-decision-1=0.9, microsoft-decision-1=0.8, laya=0.4");
+    assert.equal(barFor(bars, "openrouter", "microsoft/microsoft-decision-1"), 0.9);
+    assert.equal(barFor(barsOf("microsoft-decision-1=0.8"), "openrouter", "microsoft/microsoft-decision-1"), 0.8);
+    assert.equal(barFor(bars, "laya", "multilingual"), 0.4);
+    assert.equal(barFor(bars, "openrouter", "typesafe/jev-1.14"), undefined);
+    assert.equal(barFor(bars, undefined, undefined), undefined);
+  });
+
+  test("an id is matched without regard to case", () => {
+    assert.equal(barFor(barsOf("Laya=0.4"), "LAYA", undefined), 0.4);
   });
 });

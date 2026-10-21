@@ -1,8 +1,18 @@
 import assert from "node:assert/strict";
-import { sameModelAs } from "../hooks/pricing.ts";
-import { describe, test } from "node:test";
+import { ladderPrice, priceOfModel, sameModelAs, setOverlay, setSyncedWindows, WINDOW_TOKENS } from "../hooks/pricing.ts";
+import { setEffortSupport, setLadderModels } from "../hooks/policy.ts";
+import { afterEach, describe, test } from "node:test";
 
-import { register } from "../hooks/register.ts";
+import { CATALOG_WAIT_MS, register } from "../hooks/register.ts";
+
+// These suites exercise the window guard (a turn too long for a tier is moved
+// up, or held where it is), which needs a tier with a smaller window than the
+// others. Haiku 4.5 was that tier; Haiku 5.5 takes 1M like the rest, so the
+// guard is driven by giving haiku its old 200k here. tests/pricing.test.ts
+// covers the real windows. Each test file is its own process, so this reaches
+// no other suite.
+WINDOW_TOKENS.haiku = 200_000;
+
 
 /**
  * Drives the real `register` with a fake engine: captures the hooks it
@@ -32,31 +42,77 @@ function load(
   let contextTokens: number | null = 1_000;
   let agentStatus = "completed";
   let sessionModel = "claude-opus-5-5";
+  /** What the catalog URL answers: a body, "down" for an error, "hang" for no answer. */
+  let catalogReply: unknown = "down";
+  let catalogFetches = 0;
+  /** What the model list URL answers: a body, or "down" for an error. */
+  let modelsReply: unknown = "down";
+  let modelsFetches = 0;
+  let modelsKeySent: string | undefined;
+  /** Every routing request: where it went, and the authorization it carried. */
+  const asked: { url: string; authorization: string | undefined }[] = [];
+  /** Hosts whose routing requests fail with an HTTP error. */
+  const failingHosts = new Set<string>();
 
   // Most register tests assume sticky off; production defaults sticky on.
   // Pass `JEV_ROUTER_STICKY: undefined` to exercise the real default.
   const merged: Record<string, string | undefined> = {
     JEV_ROUTER_STICKY: "0",
+    // The catalog would use the fake fetch below, which answers Jev.
+    JEV_ROUTER_CATALOG: "0",
     ...env,
   };
 
   const $ = {
     env: { get: async (k: string) => merged[k] },
-    clock: { sleep: () => new Promise<never>(() => {}) },
+    // Time passes only for the catalog wait, and only when the catalog is hanging.
+    clock: { sleep: (ms?: number) => (ms === CATALOG_WAIT_MS && catalogReply === "hang" ? Promise.resolve() : new Promise<never>(() => {})) },
     http: {
-      fetch: async (_url: string, init?: { body?: string }) => {
+      fetch: async (url: string, init?: { body?: string; headers?: Record<string, string> }) => {
+        if (url.startsWith("https://api.anthropic.com/v1/models")) {
+          modelsFetches++;
+          modelsKeySent = init?.headers?.["x-api-key"];
+          return {
+            ok: modelsReply !== "down",
+            status: modelsReply === "down" ? 401 : 200,
+            headers: {},
+            text: JSON.stringify(modelsReply),
+          };
+        }
+        if (url.includes("raw.githubusercontent.com")) {
+          catalogFetches++;
+          if (catalogReply === "hang") return new Promise<never>(() => {});
+          return {
+            ok: catalogReply !== "down",
+            status: catalogReply === "down" ? 503 : 200,
+            headers: {},
+            text: JSON.stringify(catalogReply),
+          };
+        }
         fetches++;
+        asked.push({ url, authorization: init?.headers?.authorization });
         lastState = init?.body ? JSON.parse(init.body).state : undefined;
-        const good = ok;
+        const good = ok && ![...failingHosts].some((h) => url.includes(h));
         ok = true;
+        // Laya's own `confidence` is a different quantity (one minus the
+        // normalised entropy); the Jev-scale number is `x_jev_confidence`.
+        const laya = url.includes("nas.lan");
+        // The chosen tier carries `confidence`, the rest share what is left.
+        const probabilities = Object.fromEntries(
+          ["haiku", "sonnet", "opus", "fable"].map((t) => [t, t === tier ? confidence : (1 - confidence) / 3]),
+        );
         return {
           ok: good,
           status: good ? 200 : 500,
           headers: {},
           text: JSON.stringify({
             answers: {
-              tier: { type: "choice", choice: tier, confidence },
-              effort: { type: "score", score, confidence: scoreConfidence },
+              tier: laya
+                ? { type: "choice", choice: tier, confidence: 0.99, x_jev_confidence: confidence, probabilities }
+                : { type: "choice", choice: tier, confidence, probabilities },
+              effort: laya
+                ? { type: "score", score, confidence: 0.99, x_jev_confidence: scoreConfidence }
+                : { type: "score", score, confidence: scoreConfidence },
             },
           }),
         };
@@ -125,6 +181,21 @@ function load(
     setAgentStatus: (status: string) => {
       agentStatus = status;
     },
+    /** What the catalog URL answers from now on, and how often it was asked. */
+    setCatalog: (reply: unknown) => {
+      catalogReply = reply;
+    },
+    catalogFetches: () => catalogFetches,
+    /** What the model list URL answers from now on, how often it was asked, and the key it saw. */
+    setModels: (reply: unknown) => {
+      modelsReply = reply;
+    },
+    modelsFetches: () => modelsFetches,
+    /** The routing requests so far, in order. */
+    asked: () => asked,
+    /** Makes every routing request to a URL containing `host` fail. */
+    failHost: (host: string) => void failingHosts.add(host),
+    modelsKeySent: () => modelsKeySent,
     /** What `$.session.model()` returns. */
     setSessionModel: (model: string) => {
       sessionModel = model;
@@ -348,13 +419,13 @@ describe("register: the route in the reply", () => {
     );
     await collect(
       hooks.get("turn.step")!($, { turnId: "t8", index: 0 }, () =>
-        answeredBy("claude-haiku-4-5"),
+        answeredBy("claude-haiku-5-5"),
       ),
     );
     const out = await hooks.get('command.run:{"command":"jev"}')!($, {
       args: "",
     });
-    assert.match(out.text, /haiku-4-5 ⚠ asked opus-5-5/);
+    assert.match(out.text, /haiku-5-5 ⚠ asked opus-5-5/);
   });
 
   test("a stop chunk for a turn we never saw is left alone", async () => {
@@ -658,7 +729,7 @@ describe("register: stickiness", () => {
     await turn(hooks, $, "a1");
     setTier("haiku", 0.4);
     const second = await turn(hooks, $, "a2");
-    assert.equal(second.sent.model, "claude-haiku-4-5");
+    assert.equal(second.sent.model, "claude-haiku-5-5");
     assert.doesNotMatch(second.text, /held/);
   });
 
@@ -680,7 +751,7 @@ describe("register: stickiness", () => {
     await turn(hooks, $, "c1");
     setTier("haiku", 0.9);
     const second = await turn(hooks, $, "c2");
-    assert.equal(second.sent.model, "claude-haiku-4-5");
+    assert.equal(second.sent.model, "claude-haiku-5-5");
   });
 
   test("the bar is read from the environment", async () => {
@@ -691,7 +762,7 @@ describe("register: stickiness", () => {
     setTier("haiku", 0.4);
     assert.equal(
       (await turn(hooks, $, "d2")).sent.model,
-      "claude-haiku-4-5",
+      "claude-haiku-5-5",
       "0.4 clears a 0.3 bar",
     );
   });
@@ -784,7 +855,7 @@ describe("register: the sticky subcommand", () => {
     setTier("haiku", 0.4);
     assert.equal(
       (await turn(hooks, $, "seed2")).model,
-      "claude-haiku-4-5",
+      "claude-haiku-5-5",
       "0.4 clears the 0.3 bar",
     );
   });
@@ -799,7 +870,7 @@ describe("register: the sticky subcommand", () => {
     setTier("opus", 0.9);
     await turn(hooks, $, "off1");
     setTier("haiku", 0.4);
-    assert.equal((await turn(hooks, $, "off2")).model, "claude-haiku-4-5");
+    assert.equal((await turn(hooks, $, "off2")).model, "claude-haiku-5-5");
     assert.match((await run(hooks, $, "")).text, /sticky\s+off/);
   });
 
@@ -829,7 +900,7 @@ describe("register: the sticky subcommand", () => {
     setTier("haiku", 0.4);
     assert.equal(
       (await turn(hooks, $, "j2")).model,
-      "claude-haiku-4-5",
+      "claude-haiku-5-5",
       "switched",
     );
   });
@@ -842,7 +913,7 @@ describe("register: the sticky subcommand", () => {
     setTier("haiku", 0.4);
     assert.equal(
       (await turn(hooks, $, "k2")).model,
-      "claude-haiku-4-5",
+      "claude-haiku-5-5",
       "0.4 clears a 0.3 bar",
     );
   });
@@ -935,7 +1006,7 @@ describe("register: a tier named in the prompt", () => {
     const asked = fetches();
     fail();
     const t = await turn(hooks, $, "f3", "switch to haiku");
-    assert.equal(t.sent.model, "claude-haiku-4-5");
+    assert.equal(t.sent.model, "claude-haiku-5-5");
     assert.equal(fetches(), asked, "Jev is not called");
     assert.match(t.text, /haiku · medium · your pick/);
   });
@@ -1125,13 +1196,28 @@ describe("register: effort on Sonnet", () => {
     };
   }
 
-  test("a shaky effort change while staying on Sonnet keeps the last effort", async () => {
+  test("on Sonnet 5.5 a shaky effort change goes through: its effort change keeps the cache", async () => {
     const { hooks, $, setTier } = await started();
+    setTier("sonnet", 0.9, 1, 0.9);
+    await turn(hooks, $, "s1a");
+    setTier("sonnet", 0.9, 3, 0.49);
+    const t = await turn(hooks, $, "s2a");
+    assert.equal(t.sent.model, "claude-sonnet-5-5");
+    assert.equal(t.sent.effort, "xhigh");
+    assert.doesNotMatch(t.text, /kept/);
+  });
+
+  test("a shaky effort change while staying on Sonnet 5 keeps the last effort", async () => {
+    // Sonnet 5 has no per-message effort: an effort change rewrites its cache.
+    const { hooks, $, setTier } = await started();
+    // After the session starts: starting it points the tiers at the built-in models again.
+    setLadderModels({ sonnet: "claude-sonnet-5" });
     setTier("sonnet", 0.9, 1, 0.9);
     await turn(hooks, $, "s1");
     setTier("sonnet", 0.9, 3, 0.49);
     const t = await turn(hooks, $, "s2");
-    assert.equal(t.sent.model, "claude-sonnet-5-5");
+    setLadderModels(null);
+    assert.equal(t.sent.model, "claude-sonnet-5");
     assert.equal(t.sent.effort, "medium", "the previous effort, not xhigh");
     assert.match(t.text, /sonnet · medium · Jev 90% · kept medium: Jev 49% on xhigh/);
   });
@@ -1229,9 +1315,9 @@ describe("register: a spawned subagent", () => {
       lastStateWas: kit.lastState(),
     };
     assert.equal(lastStateWas, "List the files under hooks/ and report the count.");
-    assert.equal(passed?.model, "claude-haiku-4-5", "set on the spawn");
+    assert.equal(passed?.model, "claude-haiku-5-5", "set on the spawn");
     assert.equal(started.agentId, "agent-1");
-    assert.equal(sent.model, "claude-haiku-4-5", "and on its steps");
+    assert.equal(sent.model, "claude-haiku-5-5", "and on its steps");
     assert.equal(sent.effort, "medium", "effort reaches the loop through its steps");
   });
 
@@ -1306,7 +1392,7 @@ describe("register: a spawned subagent", () => {
     await kit.hooks.get("turn.start")!(kit.$, { text: "plan it", turnId: "m1" }, async (e: unknown) => e);
     kit.setTier("haiku", 0.6);
     const { passed } = await spawnAndStep(kit, spawnOf());
-    assert.equal(passed?.model, "claude-haiku-4-5");
+    assert.equal(passed?.model, "claude-haiku-5-5");
   });
 
   test("routing off leaves spawns alone", async () => {
@@ -1383,7 +1469,7 @@ describe("register: a spawned subagent", () => {
         },
       ),
     );
-    assert.equal(sent.model, "claude-haiku-4-5");
+    assert.equal(sent.model, "claude-haiku-5-5");
     assert.equal(sent.effort, "medium");
     const status = await run("");
     assert.doesNotMatch(status.text, /not routed at spawn/);
@@ -1449,7 +1535,7 @@ describe("register: a downgrade priced against the context", () => {
     setContext(500);
     setTier("haiku", 0.99, 0);
     const t = await turn(hooks, $, "q2", "what is 2+2");
-    assert.equal(t.sent.model, "claude-haiku-4-5");
+    assert.equal(t.sent.model, "claude-haiku-5-5");
     assert.doesNotMatch(t.text, /held/);
   });
 
@@ -1491,7 +1577,7 @@ describe("register: a downgrade priced against the context", () => {
     assert.match(held.text, /kept fable: haiku costs/);
     assert.match((await run(hooks, $, "price off")).text, /^price checks off/);
     setTier("haiku", 0.99, 0);
-    assert.equal((await turn(hooks, $, "s3", "2+2 again")).sent.model, "claude-haiku-4-5");
+    assert.equal((await turn(hooks, $, "s3", "2+2 again")).sent.model, "claude-haiku-5-5");
     assert.match((await run(hooks, $, "")).text, /price\s+off \(\/jev price on\)/);
   });
 
@@ -1517,7 +1603,7 @@ describe("register: a downgrade priced against the context", () => {
     };
     // The output is taken as the last turn's or 1.5k, whichever is smaller, so
     // 1.5k at 4k context: pays on the five-minute cache (break-even ~5k), not on the hour's (~3k).
-    assert.equal(await at("5m", 4_000), "claude-haiku-4-5");
+    assert.equal(await at("5m", 4_000), "claude-haiku-5-5");
     assert.equal(await at(undefined, 4_000), "claude-fable-5-1");
   });
 
@@ -1541,7 +1627,7 @@ describe("register: a downgrade priced against the context", () => {
     setContext(null);
     setTier("haiku", 0.99, 0);
     const t = await turn(hooks, $, "w2", "2+2");
-    assert.equal(t.sent.model, "claude-haiku-4-5", "nothing to hold to");
+    assert.equal(t.sent.model, "claude-haiku-5-5", "nothing to hold to");
     assert.doesNotMatch(t.text, /held/);
   });
 
@@ -2287,7 +2373,7 @@ describe("register: a session that was already running", () => {
     setContext(null);
     setTier("haiku", 0.99, 0);
     const t = await turn(hooks, $, "s6", "2+2");
-    assert.equal(t.sent.model, "claude-haiku-4-5", "nothing to hold to");
+    assert.equal(t.sent.model, "claude-haiku-5-5", "nothing to hold to");
   });
 
   test("a 300k turn is never sent to haiku, even with sticky off and a named tier", async () => {
@@ -2509,7 +2595,7 @@ describe("register: audit regressions (2026-09-23)", () => {
     const { hooks, $, setTier, setContext } = await boot();
     setContext(1_000);
     setTier("haiku", 0.99, 0);
-    assert.equal((await turn(hooks, $, "w1", "2+2")).sent.model, "claude-haiku-4-5");
+    assert.equal((await turn(hooks, $, "w1", "2+2")).sent.model, "claude-haiku-5-5");
     setContext(190_000);
     setTier("opus", 0.6, 2);
     const t = await turn(hooks, $, "w2", "now implement it");
@@ -2574,15 +2660,17 @@ describe("register: audit regressions (2026-09-23)", () => {
     assert.doesNotMatch((await run(kit.hooks, kit.$, "")).text, /2\+2/, "the other session's history did not carry over");
   });
 
-  test("a turn held on Sonnet by the window guard still goes through the Sonnet effort hold", async () => {
+  test("a turn held on Sonnet 5 by the window guard still goes through the Sonnet effort hold", async () => {
     const { hooks, $, setTier, setContext } = await boot();
+    setLadderModels({ sonnet: "claude-sonnet-5" });
     setContext(1_000);
     setTier("sonnet", 0.95, 1, 0.9);
-    assert.equal((await turn(hooks, $, "sw1", "a small edit")).sent.model, "claude-sonnet-5-5");
+    assert.equal((await turn(hooks, $, "sw1", "a small edit")).sent.model, "claude-sonnet-5");
     setContext(190_000);
     setTier("haiku", 0.99, 0, 0.1);
     const t = await turn(hooks, $, "sw2", "2+2");
-    assert.equal(t.sent.model, "claude-sonnet-5-5");
+    setLadderModels(null);
+    assert.equal(t.sent.model, "claude-sonnet-5");
     assert.equal(t.sent.effort, "medium", "effort held on Sonnet");
   });
 
@@ -2613,7 +2701,7 @@ describe("register: audit regressions (2026-09-23)", () => {
     setTier("haiku", 0.99, 0);
     const xml = '<task-notification><task-id>a1</task-id><summary>Review done: switch to opus for the rewrite</summary></task-notification>';
     const t = await turn(hooks, $, "tn1", xml);
-    assert.equal(t.sent.model, "claude-haiku-4-5", "Jev's pick, not the summary's words");
+    assert.equal(t.sent.model, "claude-haiku-5-5", "Jev's pick, not the summary's words");
     assert.doesNotMatch(t.text, /your pick/);
   });
 
@@ -2720,7 +2808,7 @@ describe("register: audit regressions (2026-09-23)", () => {
     const { hooks, $, setTier, setContext } = await boot();
     setContext(1_000);
     setTier("haiku", 0.99, 0);
-    assert.equal((await turn(hooks, $, "g1", "2+2")).sent.model, "claude-haiku-4-5");
+    assert.equal((await turn(hooks, $, "g1", "2+2")).sent.model, "claude-haiku-5-5");
     setContext(190_000);
     const t = await turn(hooks, $, "g2", "yes");
     assert.equal(t.sent.model, "claude-sonnet-5-5", "the cheapest tier that fits, not an unrouted turn");
@@ -3142,7 +3230,7 @@ describe("register: audit regressions (2026-09-23)", () => {
     again.setContext(20_000);
     again.setTier("haiku", 0.99, 0);
     const t = await turn(again.hooks, again.$, "x2", "2+2");
-    assert.equal(t.sent.model, "claude-haiku-4-5", "no warm cache to protect");
+    assert.equal(t.sent.model, "claude-haiku-5-5", "no warm cache to protect");
     assert.doesNotMatch(t.text, /kept fable/);
   });
 
@@ -3401,7 +3489,7 @@ describe("register: audit regressions (2026-09-23)", () => {
       await sum.hooks.get("session.compact")!(sum.$, compactEvent(2), async () => ({ messages: [] }));
       sum.setContext(null);
       sum.setTier("haiku", 0.99, 0);
-      assert.equal((await turn(sum.hooks, sum.$, "cs2", "2+2")).sent.model, "claude-haiku-4-5", "a summary leaves nothing warm");
+      assert.equal((await turn(sum.hooks, sum.$, "cs2", "2+2")).sent.model, "claude-haiku-5-5", "a summary leaves nothing warm");
     });
 
     test("/compact with instructions is the engine's to summarise", async () => {
@@ -3930,8 +4018,8 @@ describe("register: round-3 audit (2026-09-29)", () => {
     await turnOn(a, "m0");
     shared.id = "sess-M2";
     await a.hooks.get("classic.SessionStart")!(a.$, { source: "resume" }, async (e: unknown) => e);
-    await a.hooks.get("classic.PostModelSwitch")!(a.$, { from_model: "claude-opus-5-5", to_model: "claude-haiku-4-5", source: "user" }, async (e: unknown) => e);
-    assert.match((await run(a.hooks, a.$, "")).text, /session\s+claude-haiku-4-5, nothing routed yet/);
+    await a.hooks.get("classic.PostModelSwitch")!(a.$, { from_model: "claude-opus-5-5", to_model: "claude-haiku-5-5", source: "user" }, async (e: unknown) => e);
+    assert.match((await run(a.hooks, a.$, "")).text, /session\s+claude-haiku-5-5, nothing routed yet/);
   });
 
   test("what is spent with routing off survives a reload", async () => {
@@ -4193,9 +4281,9 @@ describe("register: round-4 audit (2026-09-29)", () => {
   test("an agent the router left alone gets one row, not one per turn", async () => {
     const kit = load();
     await kit.hooks.get("session.start")!(kit.$, {}, async (e: unknown) => e);
-    await kit.hooks.get("agent.spawn")!(kit.$, { prompt: "p", description: "Named", subagentType: "Explore", fork: false, background: true, model: "haiku" }, async () => ({ model: "claude-haiku-4-5", agentId: "agent-1" }));
+    await kit.hooks.get("agent.spawn")!(kit.$, { prompt: "p", description: "Named", subagentType: "Explore", fork: false, background: true, model: "haiku" }, async () => ({ model: "claude-haiku-5-5", agentId: "agent-1" }));
     for (const t of ["s1", "s2", "s3"])
-      await collect(kit.hooks.get("turn.step")!(kit.$, { turnId: t, index: 0, agentId: "agent-1" }, (e: { model: string }) => answeredBy(e.model ?? "claude-haiku-4-5")));
+      await collect(kit.hooks.get("turn.step")!(kit.$, { turnId: t, index: 0, agentId: "agent-1" }, (e: { model: string }) => answeredBy(e.model ?? "claude-haiku-5-5")));
     const rows = (await run(kit.hooks, kit.$, "")).text.split("\n").filter((l) => /not routed/.test(l));
     assert.equal(rows.length, 1);
   });
@@ -4344,20 +4432,20 @@ describe("register: round-6 findings (2026-09-29)", () => {
     await kit.hooks.get("turn.start")!(kit.$, { text: "x", turnId: "m1" }, async (e: unknown) => e);
     await collect(kit.hooks.get("turn.step")!(kit.$, { turnId: "m1", index: 0 }, (e: { model: string }) => answeredBy(e.model)));
     shared.id = "sess-MB";
-    kit.setSessionModel("claude-haiku-4-5");
+    kit.setSessionModel("claude-haiku-5-5");
     await kit.hooks.get("classic.SessionStart")!(kit.$, { source: "resume" }, async (e: unknown) => e);
-    assert.match((await run(kit.hooks, kit.$, "")).text, /session\s+claude-haiku-4-5/);
+    assert.match((await run(kit.hooks, kit.$, "")).text, /session\s+claude-haiku-5-5/);
   });
   test("an agent the router left alone keeps its one row across a reload", async () => {
     const shared = { store: new Map<string, unknown>(), id: "sess-UR" };
     const a = load(undefined, shared);
     await a.hooks.get("session.start")!(a.$, {}, async (e: unknown) => e);
-    await a.hooks.get("agent.spawn")!(a.$, { prompt: "p", description: "Named", subagentType: "Explore", fork: false, background: true, model: "haiku" }, async () => ({ model: "claude-haiku-4-5", agentId: "agent-1" }));
-    await collect(a.hooks.get("turn.step")!(a.$, { turnId: "u1", index: 0, agentId: "agent-1" }, (e: { model: string }) => answeredBy(e.model ?? "claude-haiku-4-5")));
+    await a.hooks.get("agent.spawn")!(a.$, { prompt: "p", description: "Named", subagentType: "Explore", fork: false, background: true, model: "haiku" }, async () => ({ model: "claude-haiku-5-5", agentId: "agent-1" }));
+    await collect(a.hooks.get("turn.step")!(a.$, { turnId: "u1", index: 0, agentId: "agent-1" }, (e: { model: string }) => answeredBy(e.model ?? "claude-haiku-5-5")));
     await new Promise((r) => setTimeout(r, 5));
     const b = load(undefined, shared);
     await b.hooks.get("session.start")!(b.$, {}, async (e: unknown) => e);
-    await collect(b.hooks.get("turn.step")!(b.$, { turnId: "u2", index: 0, agentId: "agent-1" }, (e: { model: string }) => answeredBy(e.model ?? "claude-haiku-4-5")));
+    await collect(b.hooks.get("turn.step")!(b.$, { turnId: "u2", index: 0, agentId: "agent-1" }, (e: { model: string }) => answeredBy(e.model ?? "claude-haiku-5-5")));
     const rows = (await run(b.hooks, b.$, "")).text.split("\n").filter((l) => /not routed/.test(l));
     assert.equal(rows.length, 1);
   });
@@ -4445,7 +4533,7 @@ describe("register: round-6 session driver findings (2026-09-29)", () => {
   test("a resume that reports another model than the snapshot's is not held to the snapshot's", async () => {
     const shared = { store: new Map<string, unknown>(), id: "sess-RA" };
     const kit = load({ AI_GATEWAY_API_KEY: "gw-key", JEV_ROUTER_STICKY: "1" }, shared);
-    kit.setSessionModel("claude-haiku-4-5");
+    kit.setSessionModel("claude-haiku-5-5");
     kit.setContext(30_000);
     await kit.hooks.get("session.start")!(kit.$, {}, async (e: unknown) => e);
     const turn = async (id: string, text: string) => {
@@ -4466,7 +4554,7 @@ describe("register: round-6 session driver findings (2026-09-29)", () => {
     await kit.hooks.get("classic.SessionStart")!(kit.$, { source: "resume", model: "claude-opus-5-5", context_tokens: 30_000 }, async (e: unknown) => e);
     await run(kit.hooks, kit.$, "tiers off haiku");
     kit.setTier("sonnet", 0.5);
-    assert.notEqual(await turn("r2", "implement the next part"), "claude-haiku-4-5");
+    assert.notEqual(await turn("r2", "implement the next part"), "claude-haiku-5-5");
   });
 
 });
@@ -4490,7 +4578,7 @@ describe("register: round-7 findings (2026-09-29)", () => {
   test("a resume's reported model is not undone by a cut-short switch the snapshot still holds", async () => {
     const shared = { store: new Map<string, unknown>(), id: "sess-RU" };
     const kit = load({ AI_GATEWAY_API_KEY: "gw-key", JEV_ROUTER_STICKY: "1" }, shared);
-    kit.setSessionModel("claude-haiku-4-5");
+    kit.setSessionModel("claude-haiku-5-5");
     kit.setContext(30_000);
     await kit.hooks.get("session.start")!(kit.$, {}, async (e: unknown) => e);
     const turn = async (id: string, text: string, step = true) => {
@@ -4823,7 +4911,7 @@ describe("register: round-10 findings (2026-09-29)", () => {
   test("/jev off then on right after a restore still checks the live model", async () => {
     const shared = { store: new Map<string, unknown>(), id: "sess-RA10" };
     const kit = load({ AI_GATEWAY_API_KEY: "gw-key", JEV_ROUTER_STICKY: "1" }, shared);
-    kit.setSessionModel("claude-haiku-4-5");
+    kit.setSessionModel("claude-haiku-5-5");
     kit.setContext(30_000);
     await kit.hooks.get("session.start")!(kit.$, {}, async (e: unknown) => e);
     const step = async (id: string, text: string) => {
@@ -4843,7 +4931,7 @@ describe("register: round-10 findings (2026-09-29)", () => {
     await jev(kit, "off");
     await jev(kit, "on");
     kit.setTier("sonnet", 0.5);
-    assert.notEqual(await step("r2", "implement the next part"), "claude-haiku-4-5");
+    assert.notEqual(await step("r2", "implement the next part"), "claude-haiku-5-5");
   });
 
   test("a ceiling lowered while an agent runs binds its later requests", async () => {
@@ -4901,11 +4989,11 @@ describe("register: round-10 driver findings (2026-09-29)", () => {
     const shared = { store: new Map<string, unknown>(), id: "sess-CB" };
     const kit = load({ AI_GATEWAY_API_KEY: "gw-key", JEV_ROUTER_STICKY: undefined, JEV_ROUTER_EXCLUDE: "fable" }, shared);
     const start = kit.hooks.get("classic.SessionStart")!;
-    kit.setSessionModel("claude-haiku-4-5");
+    kit.setSessionModel("claude-haiku-5-5");
     await kit.hooks.get("session.start")!(kit.$, {}, async (e: unknown) => e);
     kit.setContext(20_000);
     kit.setTier("sonnet", 0.9, 1);
-    await stepOf(kit, "b0", "plan the billing architecture", "claude-haiku-4-5");
+    await stepOf(kit, "b0", "plan the billing architecture", "claude-haiku-5-5");
     shared.id = "sess-CA";
     kit.setSessionModel("claude-fable-5-1");
     await start(kit.$, { source: "resume", model: "claude-fable-5-1", context_tokens: 108_946 }, async (e: unknown) => e);
@@ -4923,7 +5011,7 @@ describe("register: round-10 driver findings (2026-09-29)", () => {
     await kit.hooks.get("session.start")!(kit.$, {}, async (e: unknown) => e);
     kit.setTier("haiku", 0.95, 1);
     const first = await stepOf(kit, "lo1", "rename foo to bar", "claude-opus-5-5", [`> ⚠️ not routed: ${"word ".repeat(250)}`, "more words", "\nand more"]);
-    assert.equal(first.sent, "claude-haiku-4-5");
+    assert.equal(first.sent, "claude-haiku-5-5");
     assert.match(first.out, /^> ✳️ haiku · /);
     const status = (await kit.hooks.get('command.run:{"command":"jev"}')!(kit.$, { args: "" }, async () => ({ text: "passed through" }))) as { text: string };
     assert.match(status.text, /routing\s+on/, "the copy still answers /jev");
@@ -5324,5 +5412,505 @@ describe("register: a tier's own alias stands for its model (2026-09-29)", () =>
     const t = await stepOn(kit, "vx1", "plan it", "claude-opus-5-5@20260901");
     assert.equal(t.sent, "claude-opus-5-5@20260901");
     assert.doesNotMatch(t.line, /kept claude/);
+  });
+});
+
+describe("register: plan and catalog (2026-10-21)", () => {
+  const started = async (over: Record<string, string | undefined> = {}, reply?: unknown, shared?: { store: Map<string, unknown>; id: string }) => {
+    const kit = load({ AI_GATEWAY_API_KEY: "gw-key", ...over }, shared);
+    if (reply !== undefined) kit.setCatalog(reply);
+    await kit.hooks.get("session.start")!(kit.$, {}, async (e: unknown) => e);
+    return kit;
+  };
+  const report = async (kit: Awaited<ReturnType<typeof started>>) =>
+    (await kit.hooks.get('command.run:{"command":"jev"}')!(kit.$, { args: "" })).text as string;
+  // The catalog is applied to the pricing functions for the whole process.
+  const reset = () => setOverlay(null);
+  afterEach(reset);
+
+  const file = (over: Record<string, unknown> = {}) => ({
+    schema: 1,
+    updated: "2026-10-21",
+    models: {},
+    plans: { pro: { excludeLines: ["fable"] }, max: { excludeLines: [] }, api: { excludeLines: [] } },
+    deciders: {},
+    ...over,
+  });
+
+  test("no plan set: every tier is offered, and the report says how to set one", async () => {
+    const kit = await started();
+    const r = await report(kit);
+    assert.match(r, /plan\s+not set \(JEV_ROUTER_PLAN=pro\|max\|api\)/);
+    assert.match(r, /tiers\s+haiku, sonnet, opus, fable/);
+  });
+
+  test("pro leaves out fable: Jev is not offered it, and the report says why", async () => {
+    const kit = await started({ JEV_ROUTER_PLAN: "pro" });
+    const r = await report(kit);
+    assert.match(r, /plan\s+pro, does not cover fable — Fable is not in Pro's usage limits: it runs on pay-as-you-go usage credits/);
+    assert.match(r, /tiers\s+haiku, sonnet, opus\n/);
+    assert.match(r, /excluded\s+fable/);
+  });
+
+  test("the catalog can word the plan note itself", async () => {
+    const kit = await started(
+      { JEV_ROUTER_PLAN: "pro", JEV_ROUTER_CATALOG: undefined },
+      file({ plans: { pro: { excludeLines: ["fable"], note: "ask finance first" } } }),
+    );
+    assert.match(await report(kit), /plan\s+pro, does not cover fable — ask finance first/);
+  });
+
+  test("max and api cover every tier, and a plan nobody knows leaves nothing out", async () => {
+    for (const plan of ["max", "API", " Max "]) {
+      const r = await report(await started({ JEV_ROUTER_PLAN: plan }));
+      assert.match(r, /every tier covered/, plan);
+      assert.match(r, /tiers\s+haiku, sonnet, opus, fable/);
+    }
+    const odd = await report(await started({ JEV_ROUTER_PLAN: "team" }));
+    assert.match(odd, /plan\s+team, every tier covered/);
+  });
+
+  test("the plan and JEV_ROUTER_EXCLUDE add up, and /jev tiers can still bring a tier back", async () => {
+    const kit = await started({ JEV_ROUTER_PLAN: "pro", JEV_ROUTER_EXCLUDE: "haiku" });
+    assert.match(await report(kit), /tiers\s+sonnet, opus\n/);
+    await kit.hooks.get('command.run:{"command":"jev"}')!(kit.$, { args: "tiers on fable" });
+    assert.match(await report(kit), /tiers\s+sonnet, opus, fable/);
+  });
+
+  test("the catalog's word on a plan beats the built-in table", async () => {
+    const kit = await started({ JEV_ROUTER_PLAN: "pro", JEV_ROUTER_CATALOG: undefined }, file({ plans: { pro: { excludeLines: [] } } }));
+    const r = await report(kit);
+    assert.match(r, /plan\s+pro, every tier covered/);
+    assert.match(r, /catalog\s+fetched · data from 2026-10-21/);
+    assert.equal(kit.catalogFetches(), 1);
+  });
+
+  test("a catalog line the ladder does not have (mythos) excludes nothing", async () => {
+    const kit = await started({ JEV_ROUTER_PLAN: "pro", JEV_ROUTER_CATALOG: undefined }, file({ plans: { pro: { excludeLines: ["mythos"] } } }));
+    assert.match(await report(kit), /plan\s+pro, every tier covered/);
+  });
+
+  test("the catalog's prices reach the cost line", async () => {
+    const kit = await started(
+      { JEV_ROUTER_CATALOG: undefined },
+      file({
+        models: {
+          "claude-opus-5-5": {
+            line: "opus",
+            price: { input: 40, write5m: 50, write1h: 80, read: 2, output: 200 },
+          },
+        },
+      }),
+    );
+    assert.match(await report(kit), /catalog\s+fetched/);
+    assert.equal(priceOfModel("claude-opus-5-5")?.output, 200);
+    assert.equal(ladderPrice("opus").input, 40);
+  });
+
+  test("a catalog that cannot be fetched leaves the built-in tables and says so", async () => {
+    const kit = await started({ JEV_ROUTER_CATALOG: undefined }, "down");
+    assert.match(await report(kit), /catalog\s+none, the built-in tables answer · HTTP 503/);
+    assert.equal(priceOfModel("claude-opus-5-5")?.output, 20);
+  });
+
+  test("a catalog still on its way does not hold the session up", async () => {
+    const kit = await started({ JEV_ROUTER_CATALOG: undefined }, "hang");
+    assert.match(await report(kit), /catalog\s+loading \(the built-in tables answer until it is in\)/);
+    assert.equal(kit.catalogFetches(), 1);
+    // The session is up and routing meanwhile.
+    kit.setTier("opus", 0.95, 2);
+    assert.equal((await kit.hooks.get("turn.start")!(kit.$, { text: "implement it", turnId: "h1" }, async (e: unknown) => e)) !== undefined, true);
+  });
+
+  test("a saved copy in date is used without a second request", async () => {
+    const shared = { store: new Map<string, unknown>(), id: "sess-cat" };
+    await started({ JEV_ROUTER_CATALOG: undefined }, file(), shared);
+    const second = await started({ JEV_ROUTER_CATALOG: undefined }, "down", shared);
+    assert.equal(second.catalogFetches(), 0);
+    assert.match(await report(second), /catalog\s+saved copy · data from 2026-10-21/);
+  });
+
+  test("JEV_ROUTER_CATALOG=0 makes no request and shows no catalog line", async () => {
+    const kit = await started({ JEV_ROUTER_CATALOG: "0" }, file());
+    assert.equal(kit.catalogFetches(), 0);
+    assert.match(await report(kit), /catalog\s+not loaded/);
+  });
+
+  test("a catalog URL off GitHub is refused unless allowed, and no request goes out", async () => {
+    const kit = await started({ JEV_ROUTER_CATALOG: undefined, JEV_ROUTER_CATALOG_URL: "https://example.com/c.json" }, file());
+    assert.equal(kit.catalogFetches(), 0);
+    assert.match(await report(kit), /not allowlisted/);
+  });
+});
+
+describe("register: the model list (2026-10-21)", () => {
+  const yes = { supported: true };
+  const listed = (id: string, line: string, created: string, over: Record<string, unknown> = {}) => ({
+    id,
+    display_name: id,
+    created_at: created,
+    lifecycle: "active",
+    line,
+    max_input_tokens: 1_000_000,
+    capabilities: { effort: { supported: true, low: yes, medium: yes, high: yes, xhigh: yes, max: yes } },
+    ...over,
+  });
+  const current = () => ({
+    data: [
+      listed("claude-haiku-5-5", "haiku", "2026-10-07T00:00:00Z"),
+      listed("claude-sonnet-5-5", "sonnet", "2026-09-28T00:00:00Z"),
+      listed("claude-opus-5-5", "opus", "2026-09-21T00:00:00Z"),
+      listed("claude-fable-5-1", "fable", "2026-09-01T00:00:00Z"),
+    ],
+    has_more: false,
+    last_id: null,
+  });
+  const withNewOpus = () => ({ ...current(), data: [...current().data, listed("claude-opus-6", "opus", "2026-11-01T00:00:00Z")] });
+  const catalogWithOpus6 = {
+    schema: 1,
+    updated: "2026-11-02",
+    models: { "claude-opus-6": { line: "opus", price: { input: 4, write5m: 5, write1h: 8, read: 0.2, output: 20 } } },
+    plans: {},
+    deciders: {},
+  };
+
+  const started = async (over: Record<string, string | undefined> = {}, models?: unknown, catalog?: unknown) => {
+    const kit = load({ AI_GATEWAY_API_KEY: "gw-key", ...over });
+    if (models !== undefined) kit.setModels(models);
+    if (catalog !== undefined) kit.setCatalog(catalog);
+    await kit.hooks.get("session.start")!(kit.$, {}, async (e: unknown) => e);
+    return kit;
+  };
+  type Kit = Awaited<ReturnType<typeof started>>;
+  const report = async (kit: Kit) =>
+    (await kit.hooks.get('command.run:{"command":"jev"}')!(kit.$, { args: "" })).text as string;
+  async function turn(kit: Kit, id: string, text = "implement it") {
+    await kit.hooks.get("turn.start")!(kit.$, { text, turnId: id }, async (e: unknown) => e);
+    let sent: { model?: string; effort?: string } = {};
+    await collect(
+      kit.hooks.get("turn.step")!(kit.$, { turnId: id, index: 0 }, (e: { model: string; effort: string }) => {
+        sent = e;
+        return answeredBy(e.model ?? "claude-opus-5-5");
+      }),
+    );
+    return sent;
+  }
+  afterEach(() => {
+    setOverlay(null);
+    setLadderModels(null);
+    setEffortSupport(null);
+    setSyncedWindows(null);
+  });
+
+  test("without ANTHROPIC_API_KEY nothing is asked, and /jev says what to do", async () => {
+    const kit = await started({}, current());
+    assert.equal(kit.modelsFetches(), 0);
+    assert.match(await report(kit), /models\s+not synced: needs ANTHROPIC_API_KEY/);
+  });
+
+  test("with a key the list is fetched once, from api.anthropic.com, with that key", async () => {
+    const kit = await started({ ANTHROPIC_API_KEY: "sk-ant-test" }, current());
+    assert.equal(kit.modelsFetches(), 1);
+    assert.equal(kit.modelsKeySent(), "sk-ant-test");
+    assert.match(await report(kit), /models\s+fetched\n/);
+  });
+
+  test("JEV_ROUTER_MODEL_SYNC=0 asks nothing", async () => {
+    const kit = await started({ ANTHROPIC_API_KEY: "sk-ant-test", JEV_ROUTER_MODEL_SYNC: "0" }, current());
+    assert.equal(kit.modelsFetches(), 0);
+    assert.match(await report(kit), /models\s+off \(JEV_ROUTER_MODEL_SYNC=0\)/);
+  });
+
+  test("a key that cannot go in a header is not sent", async () => {
+    const kit = await started({ ANTHROPIC_API_KEY: "sk bad\nkey" }, current());
+    assert.equal(kit.modelsFetches(), 0);
+  });
+
+  test("a newer opus with a price is the opus tier from the first turn, and later it is a switch like any other", async () => {
+    const kit = await started(
+      { ANTHROPIC_API_KEY: "k", JEV_ROUTER_CATALOG: undefined },
+      withNewOpus(),
+      catalogWithOpus6,
+    );
+    assert.match(await report(kit), /models\s+fetched · opus: claude-opus-5-5 → claude-opus-6/);
+    kit.setTier("opus", 0.95, 2);
+    // Nothing is warm yet, so the move to the new model has no cache to cost.
+    kit.setContext(null);
+    const sent1 = await turn(kit, "m1");
+    assert.equal(sent1.model, "claude-opus-6");
+    assert.equal(priceOfModel("claude-opus-6")?.output, 20);
+    // Mid-session, with a warm cache on the old model, moving costs a rewrite and the price check holds it.
+    const warm = await started({ ANTHROPIC_API_KEY: "k", JEV_ROUTER_CATALOG: undefined }, withNewOpus(), catalogWithOpus6);
+    warm.setTier("opus", 0.95, 2);
+    assert.equal((await turn(warm, "m1b")).model, "claude-opus-5-5");
+  });
+
+  test("a newer opus with no price is left alone, and /jev says it is out", async () => {
+    const kit = await started({ ANTHROPIC_API_KEY: "k" }, withNewOpus());
+    assert.match(await report(kit), /claude-opus-6 is out but has no price yet; staying on claude-opus-5-5/);
+    kit.setTier("opus", 0.95, 2);
+    assert.equal((await turn(kit, "m2")).model, "claude-opus-5-5");
+  });
+
+  test("an effort the model does not accept is not sent", async () => {
+    const data = current().data.map((m) =>
+      m.id === "claude-sonnet-5-5"
+        ? { ...m, capabilities: { effort: { supported: true, low: yes, medium: yes, high: yes, max: yes, xhigh: null } } }
+        : m,
+    );
+    const kit = await started({ ANTHROPIC_API_KEY: "k", JEV_ROUTER_CEILING: "max" }, { ...current(), data });
+    kit.setTier("sonnet", 0.95, 3);
+    const sent = await turn(kit, "m3");
+    assert.equal(sent.model, "claude-sonnet-5-5");
+    assert.equal(sent.effort, "high", "xhigh is not one of sonnet's levels");
+  });
+
+  test("a list that cannot be fetched leaves the built-in models and says so, without the key", async () => {
+    const kit = await started({ ANTHROPIC_API_KEY: "sk-ant-secret" }, "down");
+    const r = await report(kit);
+    assert.match(r, /models\s+none, the built-in tables answer · HTTP 401/);
+    assert.ok(!r.includes("sk-ant-secret"));
+    kit.setTier("opus", 0.95, 2);
+    assert.equal((await turn(kit, "m4")).model, "claude-opus-5-5");
+  });
+});
+
+describe("register: what the engine's loader accepts (2026-10-21)", () => {
+  test("no noun of `$` is passed or read as a value; it is only ever called", async () => {
+    // `claude plugin validate` rejects a module that does (Claude Code 2.1.306):
+    // "$.store is used as a value … $ is always spelled $.noun.event(…)".
+    const { readdirSync, readFileSync } = await import("node:fs");
+    const dir = new URL("../hooks/", import.meta.url);
+    const bad: string[] = [];
+    for (const f of readdirSync(dir).filter((n) => n.endsWith(".ts"))) {
+      readFileSync(new URL(f, dir), "utf8")
+        .split("\n")
+        .forEach((line, i) => {
+          if (/^\s*(\/\/|\*|\/\*)/.test(line)) return;
+          if (/\$\.[a-z]+(?!\.[a-z])\b(?!\()/.test(line.replace(/\$\.[a-z]+\.[a-z]+/g, "")))
+            bad.push(`${f}:${i + 1}: ${line.trim()}`);
+        });
+    }
+    assert.deepEqual(bad, []);
+  });
+});
+
+describe("register: Laya and a chain of providers (2026-10-21)", () => {
+  const started = async (over: Record<string, string | undefined> = {}) => {
+    const kit = load({ JEV_ROUTER_STICKY: "1", ...over });
+    await kit.hooks.get("session.start")!(kit.$, {}, async (e: unknown) => e);
+    return kit;
+  };
+  type Kit = Awaited<ReturnType<typeof started>>;
+  const report = async (kit: Kit) =>
+    (await kit.hooks.get('command.run:{"command":"jev"}')!(kit.$, { args: "" })).text as string;
+  async function turn(kit: Kit, id: string) {
+    await kit.hooks.get("turn.start")!(kit.$, { text: "implement it", turnId: id }, async (e: unknown) => e);
+    let sent: { model?: string; effort?: string } = {};
+    const chunks = await collect(
+      kit.hooks.get("turn.step")!(kit.$, { turnId: id, index: 0 }, (e: { model: string; effort: string }) => {
+        sent = e;
+        return answeredBy(e.model ?? "claude-opus-5-5");
+      }),
+    );
+    return { sent, text: chunks.filter((c: { kind: string }) => c.kind === "text").map((c: { text: string }) => c.text).join("") };
+  }
+
+  test("LAYA_BASE_URL alone sets up Laya, and /jev says how its confidence is read", async () => {
+    const kit = await started({ LAYA_BASE_URL: "https://nas.lan:8443" });
+    assert.match(await report(kit), /provider\s+laya · LAYA_BASE_URL is set · laya · confidence read from x_jev_confidence/);
+  });
+
+  test("a Laya server that asks for no key is sent none, and is asked at its own address", async () => {
+    const kit = await started({ LAYA_BASE_URL: "https://nas.lan:8443" });
+    kit.setTier("opus", 0.95, 2);
+    await turn(kit, "l1");
+    assert.deepEqual(kit.asked(), [{ url: "https://nas.lan:8443/v1/systemone", authorization: undefined }]);
+  });
+
+  test("LAYA_API_KEY goes to Laya as a bearer token", async () => {
+    const kit = await started({ LAYA_BASE_URL: "https://nas.lan", LAYA_API_KEY: "laya-secret" });
+    kit.setTier("opus", 0.95, 2);
+    await turn(kit, "l2");
+    assert.equal(kit.asked()[0]?.authorization, "Bearer laya-secret");
+  });
+
+  test("the bar is read against x_jev_confidence, not Laya's own confidence, and the line names Laya", async () => {
+    const kit = await started({ LAYA_BASE_URL: "https://nas.lan" });
+    kit.setTier("sonnet", 0.95, 1, 0.9);
+    await turn(kit, "l3");
+    // Laya's `confidence` says 0.99 on everything; the Jev-scale number is 0.5.
+    kit.setTier("haiku", 0.5, 0, 0.9);
+    const t = await turn(kit, "l4");
+    assert.equal(t.sent.model, "claude-sonnet-5-5", "50% on x_jev_confidence does not clear a 75% bar");
+    assert.match(t.text, /kept sonnet: Laya 50% on haiku, needs 75%/);
+  });
+
+  test("a confident x_jev_confidence moves the model, and the route line says Laya", async () => {
+    const kit = await started({ LAYA_BASE_URL: "https://nas.lan" });
+    kit.setTier("sonnet", 0.95, 1, 0.9);
+    await turn(kit, "l5");
+    kit.setTier("opus", 0.97, 2, 0.9);
+    const t = await turn(kit, "l6");
+    assert.equal(t.sent.model, "claude-opus-5-5");
+    assert.match(t.text, /opus · high · Laya 97%/);
+  });
+
+  test("a Laya failure names Laya in the reason", async () => {
+    const kit = await started({ LAYA_BASE_URL: "https://nas.lan" });
+    kit.fail();
+    const t = await turn(kit, "l7");
+    assert.match(t.text, /not routed: laya said HTTP 500/);
+  });
+
+  test("with a fallback list, a failing first provider hands the turn to the next", async () => {
+    const kit = await started({ LAYA_BASE_URL: "https://nas.lan", OPENROUTER_API_KEY: "or-key", JEV_ROUTER_PROVIDER: "laya,openrouter" });
+    kit.failHost("nas.lan");
+    kit.setTier("opus", 0.97, 2, 0.9);
+    const t = await turn(kit, "l8");
+    assert.deepEqual(kit.asked().map((a) => a.url), ["https://nas.lan/v1/systemone", "https://openrouter.ai/api/v1/systemone"]);
+    assert.equal(kit.asked()[1]?.authorization, "Bearer or-key");
+    assert.equal(kit.asked()[0]?.authorization, undefined, "the OpenRouter key never went to the NAS");
+    assert.match(t.text, /opus · .* · Jev 97%/, "answered by Jev through OpenRouter, so it reads as Jev");
+    assert.match(await report(kit), /fallback\s+laya → openrouter/);
+  });
+
+  test("a named route without its key stops the setup and says which variable", async () => {
+    const kit = await started({ JEV_ROUTER_PROVIDER: "openrouter" });
+    assert.match(await report(kit), /provider\s+NOT SET UP — JEV_ROUTER_PROVIDER=openrouter but OPENROUTER_API_KEY is not set/);
+  });
+
+  test("an OpenRouter key alone routes nothing: it is not chosen by its key", async () => {
+    const kit = await started({ OPENROUTER_API_KEY: "or-key" });
+    assert.match(await report(kit), /provider\s+NOT SET UP/);
+    assert.equal(kit.asked().length, 0);
+  });
+
+  test("compaction by Jev needs TypeSafe direct, and says so for a Laya route", async () => {
+    const kit = await started({ LAYA_BASE_URL: "https://nas.lan" });
+    assert.match(await report(kit), /compact\s+on, but the laya route cannot score tool calls/);
+  });
+});
+
+describe("register: OpenRouter's Decisions API (2026-10-21)", () => {
+  const started = async (over: Record<string, string | undefined> = {}) => {
+    const kit = load({ JEV_ROUTER_STICKY: "1", JEV_ROUTER_PROVIDER: "openrouter", OPENROUTER_API_KEY: "or-key", ...over });
+    await kit.hooks.get("session.start")!(kit.$, {}, async (e: unknown) => e);
+    return kit;
+  };
+  type Kit = Awaited<ReturnType<typeof started>>;
+  const report = async (kit: Kit) =>
+    (await kit.hooks.get('command.run:{"command":"jev"}')!(kit.$, { args: "" })).text as string;
+  async function turn(kit: Kit, id: string) {
+    await kit.hooks.get("turn.start")!(kit.$, { text: "implement it", turnId: id }, async (e: unknown) => e);
+    let sent: { model?: string; effort?: string } = {};
+    const chunks = await collect(
+      kit.hooks.get("turn.step")!(kit.$, { turnId: id, index: 0 }, (e: { model: string; effort: string }) => {
+        sent = e;
+        return answeredBy(e.model ?? "claude-opus-5-5");
+      }),
+    );
+    return { sent, text: chunks.filter((c: { kind: string }) => c.kind === "text").map((c: { text: string }) => c.text).join("") };
+  }
+
+  test("JEV_ROUTER_API=decisions asks /api/alpha/decisions with the same key and Jev 1.14", async () => {
+    const kit = await started({ JEV_ROUTER_API: "decisions" });
+    kit.setTier("opus", 0.95, 2);
+    await turn(kit, "d1");
+    assert.deepEqual(kit.asked(), [{ url: "https://openrouter.ai/api/alpha/decisions", authorization: "Bearer or-key" }]);
+    assert.match(await report(kit), /provider\s+openrouter · OPENROUTER_API_KEY is set · typesafe\/jev-1.14/);
+  });
+
+  test("without it the route is System One, as before", async () => {
+    const kit = await started();
+    kit.setTier("opus", 0.95, 2);
+    await turn(kit, "d2");
+    assert.equal(kit.asked()[0]?.url, "https://openrouter.ai/api/v1/systemone");
+  });
+
+  test("another decision model is named on the line, and read for its probabilities only", async () => {
+    const kit = await started({ JEV_ROUTER_API: "decisions", JEV_ROUTER_JEV_MODEL: "perplexity/pplx-decider-v1.2" });
+    // `confidence` says 0.5; the probabilities say 0.97 for opus, which is (4·0.97 − 1)/3 = 96%.
+    kit.setTier("sonnet", 0.95, 1, 0.9);
+    await turn(kit, "d3");
+    kit.setTier("opus", 0.97, 2, 0.9);
+    const t = await turn(kit, "d4");
+    assert.equal(t.sent.model, "claude-opus-5-5");
+    assert.match(t.text, /opus · .* · pplx-decider-v1\.2 96%/);
+  });
+
+  test("a model that is Jev is read as Jev, whichever route it comes through", async () => {
+    const kit = await started({ JEV_ROUTER_API: "decisions", JEV_ROUTER_JEV_MODEL: "typesafe/jev-1.13-20260917" });
+    kit.setTier("opus", 0.97, 2, 0.9);
+    const t = await turn(kit, "d5");
+    assert.match(t.text, /Jev 97%/);
+  });
+});
+
+describe("register: a bar for each decision model (2026-10-21)", () => {
+  const MS = { JEV_ROUTER_PROVIDER: "openrouter", OPENROUTER_API_KEY: "or-key", JEV_ROUTER_API: "decisions", JEV_ROUTER_JEV_MODEL: "microsoft/microsoft-decision-1", JEV_ROUTER_STICKY: "1" };
+  const started = async (over: Record<string, string | undefined> = {}, catalog?: unknown) => {
+    const kit = load({ ...MS, ...over });
+    if (catalog !== undefined) kit.setCatalog(catalog);
+    await kit.hooks.get("session.start")!(kit.$, {}, async (e: unknown) => e);
+    return kit;
+  };
+  type Kit = Awaited<ReturnType<typeof started>>;
+  const report = async (kit: Kit) => (await kit.hooks.get('command.run:{"command":"jev"}')!(kit.$, { args: "" })).text as string;
+  const jev = (kit: Kit, args: string) => kit.hooks.get('command.run:{"command":"jev"}')!(kit.$, { args });
+  async function turn(kit: Kit, id: string) {
+    await kit.hooks.get("turn.start")!(kit.$, { text: "implement it", turnId: id }, async (e: unknown) => e);
+    let sent: { model?: string } = {};
+    const chunks = await collect(
+      kit.hooks.get("turn.step")!(kit.$, { turnId: id, index: 0 }, (e: { model: string }) => {
+        sent = e;
+        return answeredBy(e.model ?? "claude-opus-5-5");
+      }),
+    );
+    return { sent, text: chunks.filter((c: { kind: string }) => c.kind === "text").map((c: { text: string }) => c.text).join("") };
+  }
+  // Sonnet first, then an answer for opus read from the probabilities as (4·0.7 − 1)/3 = 60%.
+  async function moveToOpus(kit: Kit) {
+    kit.setTier("sonnet", 0.95, 1, 0.9);
+    await turn(kit, "b1");
+    kit.setTier("opus", 0.7, 2, 0.9);
+    return turn(kit, "b2");
+  }
+  afterEach(() => setOverlay(null));
+
+  test("without a bar of its own the session's holds 60% under 75%", async () => {
+    const t = await moveToOpus(await started());
+    assert.equal(t.sent.model, "claude-sonnet-5-5");
+    assert.match(t.text, /kept sonnet: microsoft-decision-1 60% on opus, needs 75%/);
+  });
+
+  test("JEV_ROUTER_DECIDER_BARS gives that model its own, and /jev says so", async () => {
+    const kit = await started({ JEV_ROUTER_DECIDER_BARS: "microsoft-decision-1=0.5" });
+    const t = await moveToOpus(kit);
+    assert.equal(t.sent.model, "claude-opus-5-5");
+    assert.match(await report(kit), /bars\s+microsoft-decision-1 50% \(the bar above applies to any other\)/);
+  });
+
+  test("the catalog can set it for everyone, and a bar of your own for every decider keeps that out", async () => {
+    const catalog = { schema: 1, updated: "2026-10-21", models: {}, plans: {}, deciders: {}, bars: { "microsoft/microsoft-decision-1": 0.5 } };
+    const used = await started({ JEV_ROUTER_CATALOG: undefined }, catalog);
+    assert.equal((await moveToOpus(used)).sent.model, "claude-opus-5-5");
+    const yours = await started({ JEV_ROUTER_CATALOG: undefined, JEV_ROUTER_STICKY_CONFIDENCE: "0.8" }, catalog);
+    assert.equal((await moveToOpus(yours)).sent.model, "claude-sonnet-5-5", "you set a bar for all: the catalog's recommendation stays out");
+    const named = await started({ JEV_ROUTER_CATALOG: undefined, JEV_ROUTER_STICKY_CONFIDENCE: "0.8", JEV_ROUTER_DECIDER_BARS: "microsoft-decision-1=0.5" }, catalog);
+    assert.equal((await moveToOpus(named)).sent.model, "claude-opus-5-5", "a bar you name for the model is always yours");
+  });
+
+  test("/jev sticky is the person's word for every decider", async () => {
+    const kit = await started({ JEV_ROUTER_DECIDER_BARS: "microsoft-decision-1=0.5" });
+    await jev(kit, "sticky 0.9");
+    const t = await moveToOpus(kit);
+    assert.equal(t.sent.model, "claude-sonnet-5-5");
+    assert.doesNotMatch(await report(kit), /bars\s/);
+  });
+
+  test("with stickiness off there is no bar line", async () => {
+    const kit = await started({ JEV_ROUTER_DECIDER_BARS: "microsoft-decision-1=0.5", JEV_ROUTER_STICKY: "0" });
+    assert.doesNotMatch(await report(kit), /bars\s/);
   });
 });

@@ -1,3 +1,7 @@
 node_modules/
 .DS_Store
 .claude/types/
+
+bench-results.json
+cases*.jsonl
+!scripts/bench/example-cases.jsonl

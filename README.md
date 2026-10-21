@@ -52,7 +52,7 @@ The four tiers:
 
 | Tier | For | Model |
 | --- | --- | --- |
-| `haiku` | Trivial: a lookup, a rename, a yes or no. | `claude-haiku-4-5` |
+| `haiku` | Trivial: a lookup, a rename, a yes or no. | `claude-haiku-5-5` |
 | `sonnet` | Straightforward and minor, no real decision to make. | `claude-sonnet-5-5` |
 | `opus` | Plain implementation carrying some complexity. | `claude-opus-5-5` |
 | `fable` | Planning, brainstorming, architecture, systematic debugging. | `claude-fable-5-1` |
@@ -109,7 +109,14 @@ last 20 sessions.
 
    Without `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS` the plugin loads and silently
    does nothing.
-3. **Install it.** Place the folder at `~/.claude/skills/jev-claude-router/` to load
+3. **Install it.** Straight from GitHub, no clone needed:
+
+   ```
+   /plugin marketplace add Daltonganger/jev-claude-router
+   /plugin install jev-claude-router --marketplace Daltonganger/jev-claude-router
+   ```
+
+   Or place the folder at `~/.claude/skills/jev-claude-router/` to load
    it in every session, or run `claude --plugin-dir /path/to/jev-claude-router` for
    one session.
 4. **Check it.** `npm run check-jev` reports the provider and whether it
@@ -169,7 +176,7 @@ one summary, written once every agent has finished:
 
 ```
 3 turns: fable, fable, fable (2 woken by tasks) · $6.16 · 7.4M in (99% cached) · 61k out
-agents: Explore haiku-4-5 $0.029, general-purpose opus-5-5 $0.36
+agents: Explore haiku-5-5 $0.0029, general-purpose opus-5-5 $0.36
 turn 2: kept fable: haiku costs $4.41 vs $0.13
 ```
 
@@ -194,6 +201,9 @@ jev-claude-router:
   cache     1h writes · 201k context · fable→haiku pays below 3k
   tiers     haiku, sonnet, opus, fable
   announce  on, a line per turn
+  plan      max, every tier covered — Fable is part of Max, within a share of the weekly limit; past it, usage credits
+  catalog   fetched · data from 2026-10-21
+  models    fetched
   spent     $4.12 this session
 
   Recent turns, newest first:
@@ -253,12 +263,16 @@ last route.
 
 ### 2. The window guard
 
-A turn is never sent to a tier whose context window it does not fit. Haiku
-4.5 takes 200k tokens and the other tiers a million, less 16k of headroom.
+A turn is never sent to a tier whose context window it does not fit. Every
+tier on the ladder takes a million tokens, less 16k of headroom. (Haiku 4.5
+took 200k, which is what this guard was written for; it still applies to any
+tier with a smaller window.) Haiku 5.5 takes the full window, but a request
+whose prompt is over 100k tokens pays its higher prices, and the cost checks
+count that.
 This applies whatever Jev said, and even to a tier you named: the turn stays
 on the tier already running.
 
-When the running tier is the one that no longer fits (haiku past 184k), the
+When the running tier is the one that no longer fits (a tier past its window less the headroom), the
 turn moves up only as far as it must, to the cheapest offered tier that
 fits. That holds whether Jev picked haiku again, picked a higher tier the
 checks below held back, or the turn was a go-ahead. Because the running
@@ -430,11 +444,59 @@ All settings go in the `env` block of `~/.claude/settings.json`.
 | --- | --- | --- |
 | `TYPESAFE_API_KEY` | | TypeSafe direct key. |
 | `AI_GATEWAY_API_KEY` | | Vercel AI Gateway key. |
-| `JEV_ROUTER_PROVIDER` | TypeSafe if its key is set | `typesafe` (or `direct`) or `gateway` (or `vercel`); anything else chooses by the keys set. |
+| `OPENROUTER_API_KEY` | | OpenRouter key, for `JEV_ROUTER_PROVIDER=openrouter` (Jev 1.14, `https://openrouter.ai/api/v1/systemone`). |
+| `COMMANDCODE_API_KEY` | | Command Code key, for `JEV_ROUTER_PROVIDER=commandcode` (the Provider API; GOAT plan and above). |
+| `OPENCODE_API_KEY` | | OpenCode Console key, for `JEV_ROUTER_PROVIDER=opencode`. Also set `JEV_ROUTER_JEV_MODEL`: the router does not know OpenCode's id for Jev. |
+| `JEV_ROUTER_API` | `systemone` | `decisions` makes the `openrouter` route use OpenRouter's Decisions API (`/api/alpha/decisions`) instead of its System One endpoint. Same questions and answers, and it also serves the other decision models in OpenRouter's catalog: name one in `JEV_ROUTER_JEV_MODEL` (`npm run bench:run -- --catalog` lists them). A model that is not Jev is read for its probabilities only, and named on the route line (`pplx-decider-v1.2 96%`). The API is alpha. |
+| `LAYA_BASE_URL` | | Your own Laya server, e.g. `https://nas.lan:8443`. https only, any host, no login in the URL; a trailing `/v1/systemone` is dropped. Setting it alone makes Laya the provider. |
+| `LAYA_MODEL` | `laya` | The model on your Laya server, e.g. `multilingual`. Use this rather than `JEV_ROUTER_JEV_MODEL` when Laya is one of several providers: that one reaches them all. |
+| `LAYA_API_KEY` | | Sent to the Laya server and nowhere else; leave unset for a server that asks for none. |
+| `JEV_ROUTER_PROVIDER` | TypeSafe if its key is set, else Laya if `LAYA_BASE_URL` is set, else the gateway | One of `typesafe` (or `direct`), `gateway` (or `vercel`), `openrouter`, `commandcode`, `opencode`, `laya`, or a list tried in order, e.g. `laya,openrouter`. A named route without its key or URL is an error. OpenRouter, Command Code and OpenCode are never chosen by their key alone, since those keys are used for other things; anything unrecognised chooses by the keys set. |
 | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | Must be https. Only `*.typesafe.ai` is accepted unless `JEV_ROUTER_ALLOW_CUSTOM_BASE=1`. A trailing `/v1/systemone` is dropped, since the router adds it. |
 | `JEV_ROUTER_ALLOW_CUSTOM_BASE` | off | `1` lets `TYPESAFE_BASE_URL` name any https host. That host receives your key and prompts, so set both only in your own `~/.claude/settings.json`, and check that a project's settings do not set them. |
-| `JEV_ROUTER_JEV_MODEL` | `jev-latest` | Pin a Jev version (e.g. `jev-1.13.0`) so confidences stay stable across releases. TypeSafe direct only; the gateway serves its own. |
+| `JEV_ROUTER_JEV_MODEL` | per route | Pin the model id (e.g. `jev-1.13.0` on TypeSafe direct) so confidences stay stable across releases. Defaults: `jev-latest` on TypeSafe, `typesafe/jev-1.14` on OpenRouter, `typesafe/jev-1.14.0` on Command Code, `laya` for Laya. The gateway serves its own. |
 | `JEV_ROUTER_TIMEOUT_MS` | `1500` | How long a turn waits for Jev, in milliseconds. At least 100 (anything less is taken for a mistake and the default used), at most 8000. |
+
+**Laya, and a fallback.** Laya is a Jev-compatible model you run yourself. Its own
+`confidence` is a different quantity from Jev's (one minus the normalised entropy), so
+the router reads the `x_jev_confidence` it also sends, which is on Jev's scale, and
+never `confidence`; with neither it derives the number from the probabilities. The
+route line names it (`Laya 85%`), so that a number from one model is not read as the
+other's. A server with a self-signed certificate needs `NODE_EXTRA_CA_CERTS` pointing
+at its certificate, and a model on a NAS may need a longer `JEV_ROUTER_TIMEOUT_MS`
+(at most 8000). With a list in `JEV_ROUTER_PROVIDER` the providers share the one
+budget: when the first fails at once (a refused connection, an HTTP error) the next is
+asked with the time left; when it times out the budget is spent and the turn goes
+unrouted. The thresholds below were tuned on Jev; they are used unchanged for Laya
+until they are measured on it. Compaction by Jev stays on TypeSafe direct, whatever
+else is listed.
+
+**Comparing decision models.** `scripts/bench` measures which model routes best on your
+own prompts: `npm run bench:extract` pulls the prompts you typed out of Claude Code's
+transcripts (locally, into `cases.jsonl`, which is git-ignored), `npm run bench:label`
+asks you for the tier each needs (1 haiku … 4 fable), and
+`OPENROUTER_API_KEY=… npm run bench:run -- --cases cases.jsonl --tiers haiku,sonnet,opus --models typesafe/jev-1.14,perplexity/pplx-decider-v1.2`
+(add `laya:<model>`, e.g. `laya:multilingual`, to ask your own Laya server too: its address is `LAYA_BASE_URL`, its key `LAYA_API_KEY`, and `--laya-catalog` lists its models)
+asks each model the router's own questions (`--tiers` limits the tiers on offer to the ones you really have: with Fable off, leave it out, or the models are asked to pick a tier you would never get) and prints, per model: how often it picks
+your tier, how often too low or too high, its calibration, how many answers clear the
+75% bar and how right those are, latency, and cost per thousand decisions, then your
+label counts, what always saying one tier would score (and costs: a rough index against following your labels, in the `cost vs your labels` column), a confusion matrix per model and
+a sign test against the first model. `npm run bench:report -- bench-results.json` prints
+it all again without asking anything (`bench:bars` shows, per model, how many answers reach each confidence bar and how often those are right, and suggests one if any bar helps; `bench:bars -- --bar 0.85 results.json` tests one bar chosen beforehand on prompts that were not used to choose it); given several files (`bench:report -- a.json b.json`) it puts
+their models side by side, so a model run later is compared with the earlier ones without
+asking those again (same prompts, same `--tiers`). Prompts the router never sends to the model (a bare
+go-ahead, an engine nudge, a tier named in the prompt) are left out. The prompts go to
+OpenRouter and on to each provider.
+
+**Trying other wording for the tiers.** What the router tells the model each tier is for
+(`TIER_CRITERIA` in `hooks/policy.ts`) decides a lot. `bench:run -- --criteria a.json,b.json`
+asks the same models with other wording as well, after the router's own, and lists each as
+`model [a]`. A file holds `{"criteria": {"sonnet": "…"}, "instructions": "…"}`, any part of
+it; a tier it does not name keeps the router's description. `scripts/bench/criteria/sonnet-wider.json`
+is a starting point that has not been tried. Wording chosen on the prompts it is scored on is
+flattered by them, so choose on one set and confirm on another that shares nothing with it:
+`bench:extract -- --seed 2 --exclude cases.jsonl --out cases2.jsonl`. To use wording, put it in
+`TIER_CRITERIA`.
 
 **Routing**
 
@@ -442,13 +504,50 @@ All settings go in the `env` block of `~/.claude/settings.json`.
 | --- | --- | --- |
 | `JEV_ROUTER_STICKY` | on | `0` removes the confidence bar. |
 | `JEV_ROUTER_STICKY_CONFIDENCE` | `0.75` | The confidence bar: `0.6`, `60` or `60%`. |
+| `JEV_ROUTER_DECIDER_BARS` | | A bar for particular decision models, in place of the one above: `microsoft-decision-1=0.5,laya=60%`. A key is a full model id, the id after its `/`, or a route name. For a model whose confidence is not Jev's (`bench:bars` shows where one would help), and `catalog.json` can recommend one for everyone (`bars`). A bar you set for every decider yourself keeps the catalog's out; one you name for a model is always yours; `/jev sticky` overrides all. |
 | `JEV_ROUTER_PRICE_CHECK` | on | `0` turns both price checks off. |
 | `JEV_ROUTER_UPGRADE_MAX` | `1` | Dollars an upgrade may cost over staying (a plain number, `$` allowed), or `off`. |
 | `JEV_ROUTER_CACHE_TTL` | `1h` | Cache lifetime used for pricing: `1h` (what Claude Code writes) or `5m`. |
 | `JEV_ROUTER_CEILING` | `xhigh` | Effort ceiling: an effort for all tiers, or per tier, e.g. `fable:medium,opus:high`. |
 | `JEV_ROUTER_EXCLUDE` | | Tiers not offered to Jev at session start, e.g. `fable,haiku` (commas, semicolons or spaces); `/jev tiers` toggles this per session. |
+| `JEV_ROUTER_PLAN` | | `pro`, `max` or `api`: the tiers the plan does not cover are not offered, on top of `JEV_ROUTER_EXCLUDE`. Pro leaves out `fable` (an assumption, corrected in `catalog.json`); max and api leave out nothing. Unset offers every tier. `/jev tiers on fable` brings one back for a session. |
 | `JEV_ROUTER_ALLOW_OVERRIDE` | on | `0` ignores tiers named in prompts. |
 | `JEV_ROUTER_NOTIFY_CONTINUE` | on | `0` asks Jev about finished-task turns. |
+
+**Catalog**
+
+Prices, windows and what each plan covers are kept in `catalog.json` in this
+repo, fetched at session start and saved, so a change there reaches every
+install without a new release. The built-in tables answer for anything the
+catalog does not list, or when it cannot be fetched. A session start waits at
+most 0.8 s for it; a slower fetch finishes in the background and is used from
+the next session. A price that moved more than 4× between two copies is
+reported in `/jev`.
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `JEV_ROUTER_CATALOG` | on | `0` makes no request and uses the built-in tables. |
+| `JEV_ROUTER_CATALOG_URL` | this repo's `catalog.json` | Another catalog, e.g. your fork's. https only, and only from `raw.githubusercontent.com` unless `JEV_ROUTER_ALLOW_CUSTOM_CATALOG=1`. |
+| `JEV_ROUTER_CATALOG_TTL_HOURS` | `6` | How long a saved copy is used before fetching again. |
+
+**Model list**
+
+With `ANTHROPIC_API_KEY` set, the router reads Anthropic's model list
+(`GET https://api.anthropic.com/v1/models`, the key goes there and nowhere
+else) once a day and takes from it the window of each tier's model and the
+efforts it accepts: an effort the model does not take is sent as the nearest it
+does. A newer active model of a tier's line becomes that tier's model only when
+it has a price, in `catalog.json` or the built-in table; until then `/jev` says
+it is out and the router stays on the model it has. Moving to it mid-session is
+a model switch like any other, so the price check can hold it. The list is
+asked at session start with the catalog and shares its 0.8 s wait; a list that
+comes in later is saved for the next session and changes nothing in this one.
+Without a key (a Pro or Max login has none) nothing is asked and `catalog.json`
+covers the models.
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `JEV_ROUTER_MODEL_SYNC` | on with a key | `0` never asks for the list. |
 
 **Compaction**
 

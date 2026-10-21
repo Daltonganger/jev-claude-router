@@ -229,7 +229,7 @@ export async function pruneTranscript(args: {
   });
   if (!args.provider.ok) return none(args.provider.reason);
   if (args.provider.name !== "typesafe")
-    return none("the gateway does not answer yes/no questions; needs TYPESAFE_API_KEY");
+    return none(`${args.provider.name === "gateway" ? "the gateway" : `the ${args.provider.name} route`} does not answer yes/no questions; needs TYPESAFE_API_KEY`);
 
   const TIMED_OUT = Symbol("timed-out");
   const controller = new AbortController();

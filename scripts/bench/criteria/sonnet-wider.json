@@ -1,0 +1,7 @@
+{
+  "criteria": {
+    "haiku": "Trivial, with no change to code: a lookup, a quick question with a short factual answer, a rename, a yes or no, restating something already on screen.",
+    "sonnet": "A contained change to existing code where the request already says what to do: adding a check or a parameter, changing a value or a message, a small function or test, a fix with an obvious cause, an explanation of a file or a few lines.",
+    "opus": "Real implementation or debugging that needs some design: a feature across several files, a refactor, a bug whose cause has to be found, writing a meaningful amount of new code."
+  }
+}

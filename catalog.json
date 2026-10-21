@@ -1,0 +1,81 @@
+{
+  "schema": 1,
+  "updated": "2026-10-21",
+  "note": "Mirrors the plugin's built-in tables (pricing.ts, policy.ts) as of 'updated'. Edit here to change prices, windows or plans for every install without a new release. Pro excluding fable is the router's default, not something Anthropic requires: on Pro, Fable runs on usage credits. bars: measured on one person's 153 labelled prompts (2026-10-21, fable off); see docs/WERKDOCUMENT.md before relying on one.",
+  "models": {
+    "claude-haiku-5-5": {
+      "line": "haiku",
+      "maxInputTokens": 1000000,
+      "price": {
+        "input": 0.1,
+        "write5m": 0.125,
+        "write1h": 0.2,
+        "read": 0.01,
+        "output": 0.5
+      },
+      "priceTiers": [
+        {
+          "abovePromptTokens": 100000,
+          "input": 0.5,
+          "write5m": 0.625,
+          "write1h": 1,
+          "read": 0.05,
+          "output": 2.5
+        }
+      ]
+    },
+    "claude-sonnet-5-5": {
+      "line": "sonnet",
+      "maxInputTokens": 1000000,
+      "price": {
+        "input": 2,
+        "write5m": 2.5,
+        "write1h": 4,
+        "read": 0.1,
+        "output": 10
+      }
+    },
+    "claude-opus-5-5": {
+      "line": "opus",
+      "maxInputTokens": 1000000,
+      "price": {
+        "input": 4,
+        "write5m": 5,
+        "write1h": 8,
+        "read": 0.2,
+        "output": 20
+      }
+    },
+    "claude-fable-5-1": {
+      "line": "fable",
+      "maxInputTokens": 1000000,
+      "price": {
+        "input": 10,
+        "write5m": 12.5,
+        "write1h": 20,
+        "read": 0.25,
+        "output": 50
+      }
+    }
+  },
+  "plans": {
+    "pro": {
+      "excludeLines": [
+        "fable"
+      ],
+      "note": "Fable is not in Pro's usage limits: it runs on pay-as-you-go usage credits from the first token (support.claude.com/en/articles/15424964)"
+    },
+    "max": {
+      "excludeLines": [],
+      "note": "Fable is part of Max, within a share of the weekly limit; past it, usage credits (support.claude.com/en/articles/15424964)"
+    },
+    "api": {
+      "excludeLines": [],
+      "note": "billed at API rates"
+    }
+  },
+  "deciders": {},
+  "bars": {
+    "perplexity/pplx-decider-v1.2": 0.5
+  }
+}

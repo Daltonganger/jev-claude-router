@@ -10,6 +10,64 @@
 
 ## Unreleased
 
+### Features
+
+- **Haiku 5.5 is the haiku tier** (`claude-haiku-5-5`, a 1M window). Its price
+  depends on the request: a prompt over 100k tokens, cache reads and writes
+  included, pays the higher prices. The cost line and the downgrade and upgrade
+  checks count that.
+- **`catalog.json` and a loader for it** (`hooks/catalog.ts`): prices, windows
+  and what each plan covers in one file on GitHub, fetched at session start with
+  a saved copy and the built-in tables as the fallback. The router reads its
+  prices, windows and plans; `JEV_ROUTER_CATALOG=0` turns it off, and
+  `/jev` shows where it came from.
+- **More routes to the decision model.** `JEV_ROUTER_PROVIDER` takes `openrouter`,
+  `commandcode`, `opencode` and `laya` besides `typesafe` and `gateway`, or a list
+  tried in order (`laya,openrouter`) that shares one time budget. Each route has its
+  own key and a fixed address; `LAYA_BASE_URL` is your own server (https, any host).
+  OpenRouter, Command Code and OpenCode are chosen only by name.
+- **OpenRouter's Decisions API** (`JEV_ROUTER_API=decisions`) for the `openrouter`
+  route, which also serves other decision models (`JEV_ROUTER_JEV_MODEL`). A model
+  that is not Jev is read for its probabilities only and named on the route line.
+- **`bench:run --criteria`** tries other wording for the tier descriptions against the router's
+  own, and **`bench:extract --exclude`** draws a second set of prompts that shares none with the first.
+- **A confidence bar for each decision model**: `JEV_ROUTER_DECIDER_BARS` (and `bars` in
+  `catalog.json`) set the bar the sticky logic uses for the model that answered, since another
+  model's confidence is not Jev's. `bench:bars` shows where a bar would help.
+- **`bench`** adds a rough cost index against your labels, from the router's own output prices.
+- **`LAYA_MODEL`** names the model on your Laya server without reaching the other
+  providers in a list. `scripts/bench` asks a Laya server too (`laya:<model>`).
+- **`scripts/bench`** compares decision models on your own labelled prompts:
+  extract the prompts you typed, label them, and score each model on tier
+  accuracy, too low or too high, calibration, the confidence bar, latency and cost.
+- **Laya's confidence is read as Jev's scale.** Laya's own `confidence` means
+  something else, so its `x_jev_confidence` is used, and the probabilities when it is
+  absent. The route line names the answerer (`Laya 85%`).
+- **`JEV_ROUTER_PLAN`** (`pro`, `max`, `api`): tiers the plan does not cover
+  are not offered. Pro leaves out Fable, which on Pro runs on pay-as-you-go
+  usage credits rather than the plan's limits; `/jev` says so.
+- **The model list** (`hooks/models.ts`): with `ANTHROPIC_API_KEY`, the router
+  reads `GET /v1/models` daily. A tier's window and the efforts its model accepts
+  come from it, and a newer model of the line replaces the tier's model once it
+  has a price. `JEV_ROUTER_MODEL_SYNC=0` turns it off.
+- **`npm run measure-effort-cache`** (API key) and
+  `scripts/measure-effort-cache-cli.sh` (your own Claude login) measure, for one
+  model, whether changing effort restarts the prompt cache. On Haiku 5.5 and
+  Sonnet 5.5 in Claude Code 2.1.306 it does not.
+
+### Fixes
+
+- **A shaky effort change on Sonnet 5.5 goes through.** The hold that keeps
+  Sonnet's last effort when Jev is unsure only applies where an effort change
+  restarts the prompt cache (Sonnet 5 and older); on Sonnet 5.5, which takes
+  the change after the cached prefix, nothing is held. Checked through the
+  plugin in Claude Code 2.1.306.
+- **The plugin loads again.** The catalog and model-list loaders passed `$.store`
+  as a value, which the engine's loader rejects (`claude plugin validate` fails and
+  nothing is routed). They call it instead, and a test keeps it that way.
+- **Sonnet 5.5's cache reads are $0.10, not $0.20** per million tokens, as the
+  pricing page lists them (Sonnet 5's stay at $0.20).
+
 ## 1.1.0 — 2026-09-29
 
 ### Features

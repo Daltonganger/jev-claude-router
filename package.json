@@ -12,6 +12,12 @@
     "check": "npm run typecheck && npm test && npm run validate",
     "check-jev": "node --experimental-strip-types scripts/check-jev.mjs",
     "try-prompts": "node --experimental-strip-types scripts/try-prompts.mjs",
+    "bench:extract": "node --experimental-strip-types scripts/bench/extract.mjs",
+    "bench:label": "node --experimental-strip-types scripts/bench/label.mjs",
+    "bench:bars": "node --experimental-strip-types scripts/bench/bars.mjs",
+    "bench:report": "node --experimental-strip-types scripts/bench/report.mjs",
+    "bench:run": "node --experimental-strip-types scripts/bench/run.mjs",
+    "measure-effort-cache": "node --experimental-strip-types scripts/measure-effort-cache.mjs",
     "measure-switch-cost": "node --experimental-strip-types scripts/measure-switch-cost.mjs",
     "bench-overhead": "node --experimental-strip-types scripts/bench-overhead.ts"
   },

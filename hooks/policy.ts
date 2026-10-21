@@ -7,6 +7,7 @@
  */
 
 import { sameModelAs,
+  effortKeepsCache,
   baseModel,
   fitsWindow,
   tierOfModel,
@@ -24,6 +25,8 @@ export type Decision = {
   effort: Effort;
   /** Jev's confidence in the tier, 0 to 1. The gateway rounds to 2 places. */
   confidence: number;
+  /** Who answered, when it was not Jev (Laya), for the route line. Absent for Jev. */
+  decider?: string;
   /**
    * Jev's confidence in the effort score, separately. Measured 2026-09-22:
    * the two move independently (tier 0.81 with effort 0.49 on the same
@@ -113,11 +116,22 @@ export const EFFORTS: readonly Effort[] = [
 
 /** Model ids as the engine names them. */
 export const MODEL_OF: Record<Tier, string> = {
-  haiku: "claude-haiku-4-5",
+  haiku: "claude-haiku-5-5",
   sonnet: "claude-sonnet-5-5",
   opus: "claude-opus-5-5",
   fable: "claude-fable-5-1",
 };
+
+const BUILTIN_MODEL_OF: Record<Tier, string> = { ...MODEL_OF };
+
+/**
+ * Points tiers at other models (a newer one the model list found and the
+ * catalog prices), or back at the built-in ones with null. Changes the
+ * record in place: it is read everywhere as `MODEL_OF[tier]`.
+ */
+export function setLadderModels(models: Partial<Record<Tier, string>> | null): void {
+  for (const tier of TIERS) MODEL_OF[tier] = models?.[tier] ?? BUILTIN_MODEL_OF[tier];
+}
 
 /**
  * What Jev is told each tier is for. This is the policy: edit these lines to
@@ -174,6 +188,45 @@ export function excludedTiers(raw: string | undefined): Set<Tier> {
   );
 }
 
+/**
+ * What each plan leaves out when the catalog has no word on it. Pro leaves
+ * out Fable: that is the user's assumption, not something read from Anthropic,
+ * and `catalog.json` is where it is corrected for every install.
+ */
+export const PLAN_EXCLUDES: Record<string, readonly Tier[]> = {
+  pro: ["fable"],
+  max: [],
+  api: [],
+};
+
+/**
+ * What a plan means for the tiers it leaves out, from Anthropic's support
+ * article "Claude Fable models on your plan" (support.claude.com, article
+ * 15424964, read 2026-10-21). Shown in `/jev`; `catalog.json` can replace it.
+ */
+export const PLAN_NOTES: Record<string, string> = {
+  pro: "Fable is not in Pro's usage limits: it runs on pay-as-you-go usage credits from the first token",
+  max: "Fable is part of Max, within a share of the weekly limit; past it, usage credits",
+  api: "billed at API rates",
+};
+
+/** `JEV_ROUTER_PLAN`, lowercased, or null when unset or blank. */
+export function planOf(raw: string | undefined): string | null {
+  const plan = (raw ?? "").trim().toLowerCase();
+  return plan === "" ? null : plan;
+}
+
+/**
+ * The tiers a plan does not cover. The catalog's lines for the plan when it
+ * has the plan, else the built-in table; a plan neither knows leaves nothing
+ * out. Lines that are not a tier on the ladder (`mythos`) are no tier here.
+ */
+export function planExclusions(plan: string | null, catalogLines?: readonly string[]): Tier[] {
+  if (plan === null) return [];
+  const lines = catalogLines ?? PLAN_EXCLUDES[plan] ?? [];
+  return TIERS.filter((t) => lines.includes(t));
+}
+
 /** The tiers offered to Jev, in ladder order, never empty. */
 export function offeredTiers(excluded: Set<Tier>): Tier[] {
   const kept = TIERS.filter((t) => !excluded.has(t));
@@ -226,6 +279,15 @@ export function effortOf(score: unknown): Effort {
 export function decisionOf(
   answers: unknown,
   offered: readonly Tier[] = TIERS,
+  /**
+   * Which confidence the answer is read for (see `confidenceSourceOf`): `jev`
+   * reads `confidence`; `x_jev` reads `x_jev_confidence` and never `confidence`;
+   * `probabilities` reads neither (another model's number has no known meaning)
+   * and derives both confidences from the probabilities.
+   */
+  source: "jev" | "x_jev" | "probabilities" = "jev",
+  /** Who answered, when it is not Jev, for the route line. */
+  decider?: string,
 ): Decision | null {
   if (!isRecord(answers)) return null;
 
@@ -242,25 +304,41 @@ export function decisionOf(
   // one that is not — a provider that ever sends something outside that
   // range (measured possible, not measured live) would otherwise route on
   // it live and then have the whole Decision silently dropped on restore.
-  const confidenceOf = (v: unknown) =>
-    typeof v === "number" && Number.isFinite(v)
-      ? Math.min(1, Math.max(0, v))
-      : 0;
+  // The answer's own number, in the sense `source` names, or undefined.
+  const readConfidence = (answer: object): number | undefined => {
+    if (source === "probabilities") return undefined;
+    const v = (answer as Record<string, unknown>)[source === "x_jev" ? "x_jev_confidence" : "confidence"];
+    return typeof v === "number" && Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : undefined;
+  };
 
   const probabilities = probabilitiesOf(tier.probabilities, offered);
-  const confidence =
-    typeof tier.confidence === "number" && Number.isFinite(tier.confidence)
-      ? Math.min(1, Math.max(0, tier.confidence))
-      : confidenceFrom(probabilities, offered.length, choice as Tier);
+  const confidence = readConfidence(tier) ?? confidenceFrom(probabilities, offered.length, choice as Tier);
 
   return {
     tier: choice as Tier,
     model: MODEL_OF[choice as Tier],
     effort: effortOf(isRecord(effort) ? effort.score : undefined),
     confidence,
-    effortConfidence: confidenceOf(isRecord(effort) ? effort.confidence : 0),
+    effortConfidence: isRecord(effort)
+      ? (readConfidence(effort) ?? (source === "probabilities" ? spreadConfidence(effort.probabilities) : 0))
+      : 0,
     ...(probabilities !== undefined ? { probabilities } : {}),
+    ...(decider !== undefined ? { decider } : {}),
   };
+}
+
+/**
+ * The confidence of a score answer from its probabilities, which may come as
+ * an object or an array over the levels: the same measure as `confidenceFrom`,
+ * `(n·p_max − 1) / (n − 1)`. 0 when there are none to read.
+ */
+function spreadConfidence(raw: unknown): number {
+  const values = (Array.isArray(raw) ? raw : isRecord(raw) ? Object.values(raw) : []).filter(
+    (v): v is number => typeof v === "number" && Number.isFinite(v),
+  );
+  if (values.length < 2) return 0;
+  const n = values.length;
+  return Math.min(1, Math.max(0, (n * Math.max(...values) - 1) / (n - 1)));
 }
 
 /** The per-tier probabilities from a choice answer, offered tiers only. */
@@ -345,6 +423,38 @@ export function thresholdOf(raw: string | undefined): number {
 }
 
 /**
+ * Confidence bars by decision model, for the ones whose confidence does not
+ * mean what Jev's does. A key is a full model id (`microsoft/microsoft-decision-1`),
+ * the part after its `/` (`microsoft-decision-1`), or a route name (`laya`), lowercase;
+ * a value is a bar as `confidenceShareOf` reads it.
+ */
+export type Bars = Readonly<Record<string, number>>;
+
+const BAR_KEY = /^[\w.:@/-]{1,100}$/;
+
+/** `JEV_ROUTER_DECIDER_BARS`: `microsoft-decision-1=0.85,laya=60%`. A pair that does not parse is left out. */
+export function barsOf(raw: string | undefined): Bars {
+  const out: Record<string, number> = Object.create(null);
+  for (const pair of (raw ?? "").split(/[,;\s]+/)) {
+    const at = pair.indexOf("=");
+    if (at <= 0) continue;
+    const key = pair.slice(0, at).trim().toLowerCase();
+    const bar = confidenceShareOf(pair.slice(at + 1));
+    if (BAR_KEY.test(key) && bar !== null) out[key] = bar;
+  }
+  return out;
+}
+
+/** The bar for the decider that answered, or undefined when none is set for it. */
+export function barFor(bars: Bars, via: string | undefined, model: string | undefined): number | undefined {
+  const id = (model ?? "").toLowerCase();
+  for (const key of [id, id.slice(id.lastIndexOf("/") + 1), (via ?? "").toLowerCase()])
+    // Own keys only: `constructor` or `__proto__` as a model id must not find something inherited.
+    if (key !== "" && Object.hasOwn(bars, key) && typeof bars[key] === "number") return bars[key];
+  return undefined;
+}
+
+/**
  * A confidence bar as a share strictly between 0 and 1, or null. `0.6`,
  * `60` and `60%` are the same bar; anything written with `%` is a
  * percentage, so `0.5%` is half a percent, not half. Without `%`, a number
@@ -419,6 +529,7 @@ export function stickyDecision(
     // Sonnet effort gating reads this next; dropping it made every held
     // Sonnet turn look like effort confidence 0 and always hold effort.
     effortConfidence: fresh.effortConfidence,
+    ...(fresh.decider !== undefined ? { decider: fresh.decider } : {}),
     ...(fresh.probabilities !== undefined
       ? { probabilities: fresh.probabilities }
       : {}),
@@ -883,8 +994,10 @@ export function forcedDecision(tier: Tier, fresh: Decision | null): Decision {
  * Measured 2026-09-22 on one session at ~58k context: an effort change on
  * Opus 5.5 and Haiku 4.5 costs nothing (the engine sends it per turn), but
  * on Sonnet 5 it rewrites everything after the system block, about half the
- * prefix, $0.12 at that size. So on Sonnet an effort flip is a cache miss
- * and gets the same treatment as a model switch: it has to clear the bar.
+ * prefix, $0.12 at that size. So on a Sonnet whose effort change restarts the
+ * cache an effort flip is a cache miss and gets the same treatment as a model
+ * switch: it has to clear the bar. Sonnet 5.5 is not one (see
+ * `effortKeepsCache`): its effort moves freely, and this holds nothing.
  *
  * The bar is read against Jev's confidence in the effort score, not the
  * tier, because the two are separate answers and the effort one is the
@@ -905,6 +1018,8 @@ export function holdsSonnetEffort(
   if (previous === null) return false;
   if (fresh.tier !== "sonnet" || previous.tier !== "sonnet") return false;
   if (fresh.effort === previous.effort) return false;
+  // Nothing to protect where an effort change keeps the cache.
+  if (effortKeepsCache(previous.model)) return false;
   if (ceiling !== undefined && effortRank(previous.effort) > effortRank(ceiling.sonnet)) return false;
   return (fresh.effortConfidence ?? 0) < threshold;
 }
@@ -999,11 +1114,35 @@ export function withCeiling(
   return next;
 }
 
-/** Caps a decision's effort at its tier's ceiling, keeping what Jev named. */
+let effortSupport: Partial<Record<Tier, readonly Effort[]>> = {};
+
+/** The efforts each tier's model accepts, from the model list; null forgets them. */
+export function setEffortSupport(support: Partial<Record<Tier, readonly Effort[]>> | null): void {
+  effortSupport = support ?? {};
+}
+
+/**
+ * `effort`, or the nearest level the tier's model accepts: the highest below
+ * it, else the lowest above. A tier the list said nothing about takes any.
+ */
+export function supportedEffort(tier: Tier, effort: Effort): Effort {
+  const levels = effortSupport[tier];
+  if (levels === undefined || levels.length === 0 || levels.includes(effort)) return effort;
+  const rank = effortRank(effort);
+  const below = [...levels].filter((l) => effortRank(l) < rank).sort((a, b) => effortRank(b) - effortRank(a))[0];
+  return below ?? [...levels].sort((a, b) => effortRank(a) - effortRank(b))[0] ?? effort;
+}
+
+/**
+ * Caps a decision's effort at its tier's ceiling, keeping what Jev named, and
+ * moves it to a level the tier's model accepts.
+ */
 export function capTo(decision: Decision, ceiling: Ceiling): Decision {
   const cap = ceiling[decision.tier];
-  if (effortRank(decision.effort) <= effortRank(cap)) return decision;
-  return { ...decision, effort: cap, cappedEffort: decision.effort };
+  const capped = effortRank(decision.effort) <= effortRank(cap) ? decision.effort : cap;
+  const effort = supportedEffort(decision.tier, capped);
+  if (effort === decision.effort) return decision;
+  return { ...decision, effort, cappedEffort: decision.effort };
 }
 
 /**

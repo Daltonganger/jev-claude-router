@@ -11,6 +11,7 @@
 import type { JevResult } from "./jev.ts";
 import {
   capTo,
+  barFor,
   ceilingAt,
   confidenceShareOf,
   MODEL_OF,
@@ -29,6 +30,7 @@ import {
   upgradeBar,
   withCeiling,
   withinWindow,
+  type Bars,
   type Ceiling,
   type Decision,
   type Tier,
@@ -37,17 +39,16 @@ import { sameModelAs,
   baseModel,
   breakEvenTokens,
   isDowngrade,
-  PRICE,
+  ladderPrice,
   upgradeVerdict,
   priceOfModel,
   switchVerdict,
   usageCost,
   usd,
   fitsWindow,
-  WINDOW_TOKENS,
   type Ttl,
 } from "./pricing.ts";
-import type { ProviderResult } from "./provider.ts";
+import { confidenceSourceOf, labelOf, type ProviderResult } from "./provider.ts";
 import { compactionLine, type Compaction } from "./compactor.ts";
 
 /**
@@ -109,6 +110,17 @@ export type AgentTag = {
   label: string;
 };
 
+/**
+ * How an answer is read, from the route that gave it: which confidence, and
+ * who to name on the route line when it is not Jev. The arguments after
+ * `offered` in `decisionOf`.
+ */
+function answeredVia(result: { via?: Parameters<typeof labelOf>[0]; model?: string }): ["jev" | "x_jev" | "probabilities", string | undefined] {
+  if (result.via === undefined) return ["jev", undefined];
+  const label = labelOf(result.via, result.model);
+  return [confidenceSourceOf(result.via, result.model), label === "Jev" ? undefined : label];
+}
+
 /** Percent, rounded, for a confidence. */
 const pct = (n: number) => `${Math.round(n * 100)}%`;
 
@@ -135,7 +147,7 @@ export function reasonsOf(attempt: Attempt): string[] {
             (d.heldCost.limit !== undefined
               ? `, over the ${usd(d.heldCost.limit)} limit`
               : "")
-          : `kept ${kept}: Jev ${pct(d.confidence)} on ${wanted}` +
+          : `kept ${kept}: ${d.decider ?? "Jev"} ${pct(d.confidence)} on ${wanted}` +
             (d.heldBar !== undefined ? `, needs ${pct(d.heldBar)}` : ""),
     );
   }
@@ -151,7 +163,7 @@ export function reasonsOf(attempt: Attempt): string[] {
   // Sonnet only: an effort change there re-caches half the prefix.
   if (d.heldEffort !== undefined) {
     out.push(
-      `kept ${d.effort}: Jev ${pct(d.effortConfidence ?? 0)} on ${d.heldEffort}`,
+      `kept ${d.effort}: ${d.decider ?? "Jev"} ${pct(d.effortConfidence ?? 0)} on ${d.heldEffort}`,
     );
   }
   if (d.forced) out.push(pickOf(d));
@@ -481,6 +493,8 @@ export type Status = {
   cold?: boolean;
   surface: string | null;
   provider: ProviderResult;
+  /** Every provider, in the order they are tried; absent on older callers. */
+  providers?: readonly string[];
   timeoutMs: number;
   /** The confidence a switch must clear, or null when stickiness is off. */
   sticky: number | null;
@@ -507,6 +521,16 @@ export type Status = {
   attempts: readonly Attempt[];
   /** Dollars across every turn the router saw this session, at list price. */
   spent: number;
+  /** `JEV_ROUTER_PLAN` and the tiers it leaves out; absent on older callers. */
+  plan?: string | null;
+  planExcluded?: readonly Tier[];
+  planNote?: string | null;
+  /** Where the catalog came from; absent on older callers. */
+  catalog?: string;
+  /** Confidence bars set for particular decision models; absent or empty when there are none. */
+  bars?: Bars;
+  /** What the model list found and the ladder took from it; absent on older callers. */
+  models?: string;
 };
 
 /**
@@ -532,6 +556,8 @@ type Economics = {
  */
 type Hold = {
   sticky: number | null;
+  /** Bars for particular decision models, used instead of `sticky` for the model that answered. */
+  bars?: Bars;
   running: Decision | null;
   forced?: Tier | null;
   ceiling?: Ceiling;
@@ -562,6 +588,11 @@ export function attemptOf(
   offered: readonly Tier[],
   hold: Hold = { sticky: null, running: null },
 ): Attempt {
+  // The bar the answerer is held to: its own where one is set, else the session's.
+  if (hold.sticky !== null && hold.bars !== undefined && result.ok) {
+    const bar = barFor(hold.bars, result.via, result.model);
+    if (bar !== undefined && bar !== hold.sticky) hold = { ...hold, sticky: bar };
+  }
   const summary = notificationOf(text);
   const head =
     summary === null
@@ -608,7 +639,7 @@ export function attemptOf(
     return { ...head, ms: result.ms, skipped: result.reason };
   }
 
-  const fresh = result.ok ? decisionOf(result.answers, offered) : null;
+  const fresh = result.ok ? decisionOf(result.answers, offered, ...answeredVia(result)) : null;
   let decision = forced !== null ? forcedDecision(forced, fresh) : fresh;
   if (!decision) {
     return {
@@ -617,8 +648,8 @@ export function attemptOf(
       skipped: "Jev answered but named no tier we offered",
     };
   }
-  // First of all, can the tier take a prompt this long? Haiku's window is
-  // 200k; a turn carrying more is refused by the API, forced or not.
+  // First of all, can the tier take a prompt this long? A turn carrying more
+  // than its window is refused by the API, forced or not.
   if (hold.economics !== undefined) {
     const fits = withinWindow(
       decision,
@@ -654,6 +685,7 @@ export function attemptOf(
             model: MODEL_OF[step],
             effort: decision.effort,
             confidence: decision.confidence,
+            ...(decision.decider !== undefined ? { decider: decision.decider } : {}),
             ...(decision.effortConfidence !== undefined
               ? { effortConfidence: decision.effortConfidence }
               : {}),
@@ -707,7 +739,7 @@ export function attemptOf(
       running.tier === decision.tier &&
       running.model !== decision.model;
     const fromPrice =
-      running !== null ? (priceOfModel(running.model) ?? PRICE[running.tier]) : null;
+      running !== null ? (priceOfModel(running.model) ?? ladderPrice(running.tier)) : null;
     const upgrade =
       running !== null && !downgrade && !lateral && running.tier !== decision.tier;
     const verdict =
@@ -874,7 +906,7 @@ export function spawnAttemptOf(
 ): Attempt {
   const head = { prompt: kept(description), kind: "agent" as const, agent };
   if (!result.ok) return { ...head, ms: result.ms, skipped: result.reason };
-  const fresh = decisionOf(result.answers, offered);
+  const fresh = decisionOf(result.answers, offered, ...answeredVia(result));
   if (!fresh) {
     return {
       ...head,
@@ -887,7 +919,7 @@ export function spawnAttemptOf(
     return {
       ...head,
       ms: result.ms,
-      skipped: `Jev ${pct(fresh.confidence)} on ${fresh.tier}, needs ${pct(SUBAGENT_CONFIDENCE)}`,
+      skipped: `${fresh.decider ?? "Jev"} ${pct(fresh.confidence)} on ${fresh.tier}, needs ${pct(SUBAGENT_CONFIDENCE)}`,
     };
   }
   return { ...head, ms: result.ms, decision: capTo(decision, ceiling) };
@@ -913,7 +945,7 @@ function sureOf(d: Decision, kind?: Attempt["kind"], continued?: boolean): strin
   if (kind === "continue" || kind === "nudge") return "";
   if (d.forced && d.confidence === 0) return "";
   if (d.jevFailed !== undefined) return "";
-  return `Jev ${pct(d.confidence)}`;
+  return `${d.decider ?? "Jev"} ${pct(d.confidence)}`;
 }
 
 /** `opus-5-5` for `claude-opus-5-5-20260901`: the id without its prefix and date. */
@@ -1150,13 +1182,22 @@ export function statusReport(status: Status): string {
   lines.push(`  surface   ${status.surface === null ? "unknown" : plain(status.surface)}`);
 
   if (status.provider.ok) {
-    const key =
-      status.provider.name === "typesafe"
-        ? "TYPESAFE_API_KEY"
-        : "AI_GATEWAY_API_KEY";
+    const key = {
+      typesafe: "TYPESAFE_API_KEY",
+      gateway: "AI_GATEWAY_API_KEY",
+      openrouter: "OPENROUTER_API_KEY",
+      commandcode: "COMMANDCODE_API_KEY",
+      opencode: "OPENCODE_API_KEY",
+      laya: "LAYA_BASE_URL",
+    }[status.provider.name];
     lines.push(
-      `  provider  ${status.provider.name} · ${key} is set · ${plain(status.provider.model)}`,
+      `  provider  ${status.provider.name} · ${key} is set · ${plain(status.provider.model)}` +
+        (status.provider.name === "laya"
+          ? ` · confidence read from x_jev_confidence`
+          : ""),
     );
+    if (status.providers !== undefined && status.providers.length > 1)
+      lines.push(`  fallback  ${status.providers.join(" → ")} (the next is asked when one fails at once)`);
   } else {
     // The reason names the fix: a missing key, a bad base URL, a provider
     // forced without its key. "No keys" alone sent people after the wrong one.
@@ -1186,6 +1227,10 @@ export function statusReport(status: Status): string {
           : "off (/jev price on)"
       }`,
     );
+  if (status.sticky !== null && status.bars !== undefined && Object.keys(status.bars).length > 0)
+    lines.push(
+      `  bars      ${Object.entries(status.bars).map(([k, v]) => `${plain(k)} ${pct(v)}`).join(", ")} (the bar above applies to any other)`,
+    );
   lines.push(`  ceiling   ${ceilingLine(status.ceiling)}`);
   if (status.compactOn !== undefined)
     lines.push(
@@ -1193,7 +1238,7 @@ export function statusReport(status: Status): string {
         status.compactOn
           ? `${
               status.provider.ok && status.provider.name !== "typesafe"
-                ? "on, but the gateway cannot score tool calls (needs TypeSafe direct): the engine summarises"
+                ? `on, but ${status.provider.name === "gateway" ? "the gateway" : `the ${status.provider.name} route`} cannot score tool calls (needs TypeSafe direct): the engine summarises`
                 : "on, Jev prunes tool calls"
             }${status.compaction ? ` · last: ${compactionLine(status.compaction)}` : ""}`
           : "off (/jev compact on)"
@@ -1215,6 +1260,20 @@ export function statusReport(status: Status): string {
   if (notOffered.length > 0) {
     lines.push(`  excluded  ${notOffered.join(", ")}`);
   }
+  if (status.plan !== undefined)
+    lines.push(
+      `  plan      ${
+        status.plan === null
+          ? "not set (JEV_ROUTER_PLAN=pro|max|api); every tier is offered"
+          : `${status.plan}${
+              (status.planExcluded ?? []).length > 0
+                ? `, does not cover ${(status.planExcluded ?? []).join(", ")}`
+                : ", every tier covered"
+            }${status.planNote ? ` — ${words(status.planNote)}` : ""}`
+      }`,
+    );
+  if (status.catalog !== undefined) lines.push(`  catalog   ${status.catalog}`);
+  if (status.models !== undefined) lines.push(`  models    ${status.models}`);
   if (status.spent > 0) lines.push(`  spent     ${usd(status.spent)} this session`);
 
   lines.push("");
@@ -1272,7 +1331,7 @@ function cacheLine(status: Status): string {
         to,
         out,
         status.ttl,
-        priceOfModel(running.model) ?? PRICE[from],
+        priceOfModel(running.model) ?? ladderPrice(from),
         status.cold === true,
       );
       // Never a figure above the real one: under 1k it is shown whole.

@@ -468,6 +468,19 @@ Microsoft (eigen tekst van de router) goed van fout scheidt, dus `bars` in `cata
 - Wat een balk dan doet: hij bepaalt hoe vaak de router van tier wisselt, niet hoe vaak hij gelijk heeft. Bij 75%
   houdt de router 46% (Microsoft) tot 72% (Jev) van de antwoorden vast. Of dat helpt, laat deze meting niet zien,
   want de prompts zijn onafhankelijk getrokken en dus is er geen "vorige beurt" om tegen te vergelijken.
+- **Perplexity, Mercury en Laya (balken vanaf 20%, 2026-10-21).** Perplexity v1.2 (153 antwoorden, 35% goed in het
+  geheel): zijn zekerheid scheidt wel; bij balk 50% haalt 35% van de antwoorden hem en is 49% goed, bij 60% is 54% goed
+  voor 25% van de antwoorden (p = 0,003 en 0,002). Daarom staat `perplexity/pplx-decider-v1.2: 0.5` in `bars`
+  van `catalog.json`; een balk maakt het model niet beter (35% is onder "altijd haiku"), hij laat de router alleen
+  wisselen op de antwoorden die het model zelf het zekerst weet. Perplexity Flash (153, 41%): geen balk haalt de
+  toets (beste p = 0,057 bij 65%), en Laya `multilingual` (153, 41%): zijn zekerheid zegt niets (32% tot 43% goed bij
+  elke balk, p ≈ 0,5 tot 0,97; slechts 30% van de antwoorden haalt 50%). Mercury (79): 58% tot 67% goed bij 70% tot
+  85%, tegen 39% overall, maar p = 0,005 bij 75% haalt de strenge grens (0,0038) net niet. Voor Flash en Laya geen
+  aanbeveling in de catalogus; een balk is daar een knop voor hoe vaak de router wisselt. Bij Laya haalt maar 5% van
+  de antwoorden 75%: op de standaardbalk blijft de router vrijwel altijd op de lopende tier.
+- Jev op set A alleen, met balken vanaf 20%: de antwoorden onder 25% zijn maar 21% goed (4 van 19), de rest 58%
+  (p = 0,002). Dat zit onderaan, niet bij de hoge balken waar de standaard van 75% op mikt. Of dat ook op set A + B
+  zo is, is nog niet gezien (de eerdere A + B-tabel begon bij 50%).
 - Opvallend maar post hoc: Microsoft met de ruimere tierbeschrijving (`sonnet-wider`) heeft wel een scheiding: bij
   een balk van 85% is 64% van de antwoorden goed (55% van alle), tegen 39% eronder (p ≈ 0,001; bij 90%: 65% tegen
   43%, p ≈ 0,003). Dit is gevonden door 40 combinaties van model, tekst en balk te bekijken, dus het geldt pas als

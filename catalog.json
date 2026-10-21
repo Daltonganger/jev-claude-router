@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "updated": "2026-10-21",
-  "note": "Mirrors the plugin's built-in tables (pricing.ts, policy.ts) as of 'updated'. Edit here to change prices, windows or plans for every install without a new release. Pro excluding fable is the router's default, not something Anthropic requires: on Pro, Fable runs on usage credits.",
+  "note": "Mirrors the plugin's built-in tables (pricing.ts, policy.ts) as of 'updated'. Edit here to change prices, windows or plans for every install without a new release. Pro excluding fable is the router's default, not something Anthropic requires: on Pro, Fable runs on usage credits. bars: measured on one person's 153 labelled prompts (2026-10-21, fable off); see docs/WERKDOCUMENT.md before relying on one.",
   "models": {
     "claude-haiku-5-5": {
       "line": "haiku",
@@ -75,5 +75,7 @@
     }
   },
   "deciders": {},
-  "bars": {}
+  "bars": {
+    "perplexity/pplx-decider-v1.2": 0.5
+  }
 }

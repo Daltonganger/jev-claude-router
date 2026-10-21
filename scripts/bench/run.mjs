@@ -22,9 +22,9 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { requestBodyOf, stateOf } from "../../hooks/jev.ts";
-import { decisionOf } from "../../hooks/policy.ts";
+import { decisionOf, isContinuation, isEngineNudge, parseOverride } from "../../hooks/policy.ts";
 import { confidenceSourceOf, labelOf } from "../../hooks/provider.ts";
-import { agreement, summarize, table, TIERS } from "./metrics.mjs";
+import { agreement, report, summarize, table, TIERS } from "./metrics.mjs";
 
 const TIMEOUT_MS = 20_000;
 
@@ -108,6 +108,16 @@ export async function run({ cases, models, base, api, key, concurrency = 4, conf
   return { rows, summaries, agreement: agreement(rows) };
 }
 
+/**
+ * Whether the router would ask the model about this prompt at all. A bare
+ * go-ahead continues the last route, an engine nudge does too, and a tier
+ * named in the prompt is taken as given; none of those reach the decision
+ * model, so they are not part of what is being compared.
+ */
+export function routerAsks(prompt) {
+  return !isContinuation(prompt) && !isEngineNudge(prompt) && parseOverride(prompt) === null;
+}
+
 /** The decision models OpenRouter lists, as lines. */
 export async function catalog({ base, fetchImpl = fetch }) {
   const res = await fetchImpl(`${base}/api/v1/models?output_modalities=decisions`);
@@ -138,7 +148,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     process.exit(2);
   }
   const all = readFileSync(casesFile, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
-  const cases = all.filter((c) => TIERS.includes(c.tier)).slice(0, Number(arg("limit", "100000")));
+  const labelled = all.filter((c) => TIERS.includes(c.tier));
+  const cases = labelled.filter((c) => routerAsks(c.prompt)).slice(0, Number(arg("limit", "100000")));
+  if (cases.length < labelled.length) console.log(`${labelled.length - cases.length} labelled prompts left out: the router does not ask the model about them (a bare go-ahead, an engine nudge, or a tier named in the prompt).`);
   if (cases.length === 0) {
     console.error("no labelled cases: run scripts/bench/label.mjs first");
     process.exit(2);
@@ -154,6 +166,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     if (Object.keys(counts).length > 0)
       console.log(`\n${model} failed: ${Object.entries(counts).map(([e, n]) => `${e} ×${n}`).join(", ")}`);
   }
+  console.log(`\n${report(result.rows, result.summaries)}`);
   console.log("\nAgreement on the tier:");
   for (const [pair, share] of Object.entries(result.agreement)) console.log(`  ${pair.replace("|", "  vs  ")}  ${share === null ? "–" : `${Math.round(share * 100)}%`}`);
   const out = arg("out", "bench-results.json");

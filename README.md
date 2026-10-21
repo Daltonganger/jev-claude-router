@@ -470,8 +470,12 @@ asks you for the tier each needs (1 haiku … 4 fable), and
 `OPENROUTER_API_KEY=… npm run bench:run -- --cases cases.jsonl --models typesafe/jev-1.14,perplexity/pplx-decider-v1.2`
 asks each model the router's own questions and prints, per model: how often it picks
 your tier, how often too low or too high, its calibration, how many answers clear the
-75% bar and how right those are, latency, and cost per thousand decisions. The
-prompts go to OpenRouter and on to each provider.
+75% bar and how right those are, latency, and cost per thousand decisions, then your
+label counts, what always saying one tier would score, a confusion matrix per model and
+a sign test against the first model. `npm run bench:report -- bench-results.json` prints
+it all again without asking anything. Prompts the router never sends to the model (a bare
+go-ahead, an engine nudge, a tier named in the prompt) are left out. The prompts go to
+OpenRouter and on to each provider.
 
 **Routing**
 

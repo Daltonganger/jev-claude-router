@@ -86,6 +86,62 @@ export function agreement(byModel) {
   return out;
 }
 
+/** How many of each label there are, over the rows that carry a tier label. */
+export function labelCounts(rows) {
+  const counts = Object.fromEntries(TIERS.map((t) => [t, 0]));
+  for (const r of rows) if (TIERS.includes(r.label)) counts[r.label]++;
+  return counts;
+}
+
+/**
+ * What always picking one tier would score: the bar a model has to clear to
+ * be worth asking at all. A set where half the prompts are `sonnet` is
+ * matched by a model that never looks at the prompt.
+ */
+export function baselines(rows) {
+  const counts = labelCounts(rows);
+  const n = Object.values(counts).reduce((a, b) => a + b, 0);
+  return Object.fromEntries(TIERS.map((t) => [t, n === 0 ? null : counts[t] / n]));
+}
+
+/** label (rows) by pick (columns), counts, over the answered cases. */
+export function confusion(rows) {
+  const m = Object.fromEntries(TIERS.map((l) => [l, Object.fromEntries(TIERS.map((p) => [p, 0]))]));
+  for (const r of rows) if (TIERS.includes(r.label) && TIERS.includes(r.pick)) m[r.label][r.pick]++;
+  return m;
+}
+
+/** P(X ≤ k) for X ~ Binomial(n, 1/2). */
+function binomialCdf(k, n) {
+  let term = 1; // C(n, 0)
+  let sum = 0;
+  for (let i = 0; i <= k; i++) {
+    sum += term;
+    term = (term * (n - i)) / (i + 1);
+  }
+  return sum / 2 ** n;
+}
+
+/**
+ * Whether two models differ on the same prompts: the cases where only one is
+ * right, and the exact two-sided sign-test p-value on them. A large p means
+ * the gap could be luck on a set this size.
+ */
+export function compare(a, b) {
+  let onlyA = 0;
+  let onlyB = 0;
+  for (let i = 0; i < Math.min(a.length, b.length); i++) {
+    if (!a[i]?.pick || !b[i]?.pick || !TIERS.includes(a[i].label)) continue;
+    const ra = a[i].pick === a[i].label;
+    const rb = b[i].pick === b[i].label;
+    if (ra && !rb) onlyA++;
+    if (rb && !ra) onlyB++;
+  }
+  const n = onlyA + onlyB;
+  const p = n === 0 ? 1 : Math.min(1, 2 * binomialCdf(Math.min(onlyA, onlyB), n));
+  return { onlyA, onlyB, p };
+}
+
 const pct = (x) => (x === null || x === undefined ? "–" : `${Math.round(x * 100)}%`);
 const ms = (x) => (x === null || x === undefined ? "–" : `${Math.round(x)}ms`);
 const usd = (x) => (x === null || x === undefined ? "–" : x < 0.01 ? `$${x.toFixed(4)}` : `$${x.toFixed(3)}`);
@@ -99,4 +155,30 @@ export function table(summaries) {
     return `| ${model} | ${s.answered}/${s.cases}${s.errors ? ` (${s.errors} err)` : ""} | ${pct(s.accuracy)} | ${pct(s.withinOne)} | ${pct(s.under)} | ${pct(s.over)} | ${s.ece === null ? "–" : s.ece.toFixed(3)} | ${pct(b.share)} (${pct(b.accuracy)}) | ${ms(s.meanMs)} / ${ms(s.p95Ms)} | ${usd(s.costPer1k)} |`;
   });
   return [head, rule, ...rows].join("\n");
+}
+
+/** The label counts, the always-one-tier baselines and a confusion matrix per model, as text. */
+export function report(rows, summaries) {
+  const first = Object.values(rows)[0] ?? [];
+  const counts = labelCounts(first);
+  const base = baselines(first);
+  const out = [];
+  out.push(`Your labels: ${TIERS.map((t) => `${t} ${counts[t]}`).join(", ")}`);
+  out.push(`Never looking at the prompt and always saying one tier scores: ${TIERS.map((t) => `${t} ${pct(base[t])}`).join(", ")}`);
+  for (const [model, r] of Object.entries(rows)) {
+    const m = confusion(r);
+    out.push(`\n${model}: your label (rows) against its pick (columns)`);
+    out.push(`            ${TIERS.map((t) => t.padStart(7)).join("")}`);
+    for (const l of TIERS) out.push(`  ${l.padEnd(9)} ${TIERS.map((t) => String(m[l][t]).padStart(7)).join("")}`);
+  }
+  const names = Object.keys(rows);
+  if (names.length > 1) {
+    out.push(`\nAgainst ${names[0]}, on the cases where exactly one of the two is right (a p above 0.05 means the gap could be luck):`);
+    for (const other of names.slice(1)) {
+      const c = compare(rows[names[0]], rows[other]);
+      out.push(`  ${other}: ${names[0]} alone right ${c.onlyA}, ${other} alone right ${c.onlyB}, p = ${c.p.toFixed(2)}`);
+    }
+  }
+  void summaries;
+  return out.join("\n");
 }

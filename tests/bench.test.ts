@@ -12,11 +12,11 @@ import { join } from "node:path";
 import { describe, test } from "node:test";
 
 // @ts-expect-error plain JavaScript modules
-import { agreement, percentile, summarize, table } from "../scripts/bench/metrics.mjs";
+import { agreement, baselines, compare, confusion, labelCounts, percentile, report, summarize, table } from "../scripts/bench/metrics.mjs";
 // @ts-expect-error plain JavaScript modules
 import { seeded, typedPrompt } from "../scripts/bench/extract.mjs";
 // @ts-expect-error plain JavaScript modules
-import { ask, catalog, run } from "../scripts/bench/run.mjs";
+import { ask, catalog, routerAsks, run } from "../scripts/bench/run.mjs";
 
 const row = (label: string, pick: string | null, confidence = 0.9, ms = 100, cost = 0.00001) => ({ label, pick, confidence, ms, cost });
 
@@ -98,6 +98,52 @@ describe("metrics", () => {
     const t = table({ m1: summarize([row("opus", "opus")]), m2: summarize([row("opus", "haiku")]) });
     assert.equal(t.split("\n").length, 4);
     assert.match(t, /\| m1 \| 1\/1 \| 100% /);
+  });
+});
+
+describe("the label set, baselines and a fair comparison", () => {
+  const rows = [row("sonnet", "opus"), row("sonnet", "sonnet"), row("sonnet", "opus"), row("haiku", "haiku"), row("fable", "opus")];
+
+  test("label counts and what always saying one tier would score", () => {
+    assert.deepEqual(labelCounts(rows), { haiku: 1, sonnet: 3, opus: 0, fable: 1 });
+    assert.deepEqual(baselines(rows), { haiku: 0.2, sonnet: 0.6, opus: 0, fable: 0.2 });
+    assert.equal(baselines([])["sonnet"], null);
+  });
+
+  test("the confusion matrix has your label in the rows and the pick in the columns", () => {
+    const m = confusion(rows);
+    assert.equal(m.sonnet.opus, 2);
+    assert.equal(m.sonnet.sonnet, 1);
+    assert.equal(m.fable.opus, 1);
+    assert.equal(m.haiku.haiku, 1);
+    assert.equal(confusion([row("skip", "opus"), row("opus", null)]).opus.opus, 0);
+  });
+
+  test("the sign test: equal gaps are luck, a lopsided one on many cases is not", () => {
+    const right = (n: number) => [...Array(n)].map(() => row("opus", "opus"));
+    const wrong = (n: number) => [...Array(n)].map(() => row("opus", "haiku"));
+    const even = compare([...right(5), ...wrong(5)], [...wrong(5), ...right(5)]);
+    assert.equal(even.onlyA, 5);
+    assert.equal(even.onlyB, 5);
+    assert.ok(even.p > 0.9);
+    const lopsided = compare(right(20), wrong(20));
+    assert.equal(lopsided.onlyA, 20);
+    assert.ok(lopsided.p < 0.001);
+    assert.equal(compare(right(3), right(3)).p, 1, "no case where they differ");
+  });
+
+  test("the report states the labels, the baselines and each matrix", () => {
+    const text = report({ a: rows, b: rows.map((r) => ({ ...r, pick: r.label })) }, {});
+    assert.match(text, /Your labels: haiku 1, sonnet 3, opus 0, fable 1/);
+    assert.match(text, /always saying one tier scores: haiku 20%, sonnet 60%/);
+    assert.match(text, /a: your label \(rows\) against its pick \(columns\)/);
+    assert.match(text, /Against a, on the cases where exactly one/);
+    assert.match(text, /b: a alone right 0, b alone right 3, p = 0\.25/);
+  });
+
+  test("a prompt the router never sends to the model is left out", () => {
+    for (const p of ["ok", "Yes!", "go ahead.", "use opus for this", "switch to haiku"]) assert.equal(routerAsks(p), false, p);
+    for (const p of ["rename foo to bar", "Ja, maak dat", "ok but first explain the change"]) assert.equal(routerAsks(p), true, p);
   });
 });
 

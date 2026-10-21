@@ -5637,3 +5637,23 @@ describe("register: the model list (2026-10-21)", () => {
     assert.equal((await turn(kit, "m4")).model, "claude-opus-5-5");
   });
 });
+
+describe("register: what the engine's loader accepts (2026-10-21)", () => {
+  test("no noun of `$` is passed or read as a value; it is only ever called", async () => {
+    // `claude plugin validate` rejects a module that does (Claude Code 2.1.306):
+    // "$.store is used as a value … $ is always spelled $.noun.event(…)".
+    const { readdirSync, readFileSync } = await import("node:fs");
+    const dir = new URL("../hooks/", import.meta.url);
+    const bad: string[] = [];
+    for (const f of readdirSync(dir).filter((n) => n.endsWith(".ts"))) {
+      readFileSync(new URL(f, dir), "utf8")
+        .split("\n")
+        .forEach((line, i) => {
+          if (/^\s*(\/\/|\*|\/\*)/.test(line)) return;
+          if (/\$\.[a-z]+(?!\.[a-z])\b(?!\()/.test(line.replace(/\$\.[a-z]+\.[a-z]+/g, "")))
+            bad.push(`${f}:${i + 1}: ${line.trim()}`);
+        });
+    }
+    assert.deepEqual(bad, []);
+  });
+});

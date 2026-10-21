@@ -393,7 +393,8 @@ async function startModels(
   const loading = loadModels({
     fetch: (u, init) => $.http.fetch(u, init),
     sleep: (ms, options) => $.clock.sleep(ms, options),
-    store: $.store,
+    // Called, never passed: the engine rejects a module that uses a noun of `$` as a value.
+    store: { get: (key) => $.store.get(key), set: (key, value) => $.store.set(key, value) },
     apiKey: key,
   }).catch((): ModelsResult => ({ models: null, source: "none", notes: ["models: failed to load"] }));
   const timer = new AbortController();
@@ -452,7 +453,8 @@ async function startCatalog(
   const loading = loadCatalog({
     fetch: (u, init) => $.http.fetch(u, init),
     sleep: (ms, options) => $.clock.sleep(ms, options),
-    store: $.store,
+    // Called, never passed: the engine rejects a module that uses a noun of `$` as a value.
+    store: { get: (key) => $.store.get(key), set: (key, value) => $.store.set(key, value) },
     url: url.url,
     ttlMs: catalogTtlOf(raw.ttl),
   })

@@ -28,8 +28,10 @@
   reads `GET /v1/models` daily. A tier's window and the efforts its model accepts
   come from it, and a newer model of the line replaces the tier's model once it
   has a price. `JEV_ROUTER_MODEL_SYNC=0` turns it off.
-- **`npm run measure-effort-cache`** measures, on the real API and for one model,
-  whether changing effort restarts the prompt cache.
+- **`npm run measure-effort-cache`** (API key) and
+  `scripts/measure-effort-cache-cli.sh` (your own Claude login) measure, for one
+  model, whether changing effort restarts the prompt cache. On Haiku 5.5 and
+  Sonnet 5.5 in Claude Code 2.1.306 it does not.
 
 ### Fixes
 

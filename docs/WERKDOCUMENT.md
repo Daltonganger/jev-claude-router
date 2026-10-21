@@ -150,17 +150,33 @@ voor Haiku 5.5 of Sonnet 5.5. Dat verklaart de eerdere meting: Sonnet 5 had geen
 effort (elke wijziging herschreef de cache), en Haiku 4.5 kent effort niet (de wijziging doet
 niets). De vraag voor Haiku 5.5 is dus **welke van de twee Claude Code stuurt**.
 
-Meten, in twee stappen:
-1. `ANTHROPIC_API_KEY=… npm run measure-effort-cache` (script `scripts/measure-effort-cache.mjs`,
-   een paar cent). Vier requests met dezelfde lange eerste boodschap: effort laag (schrijft),
-   nog eens laag (controle), top-level hoog, per-bericht hoog. Het zegt per variant of de cache
-   blijft, of de hele prefix opnieuw geschreven wordt. Ook te draaien voor Sonnet 5.5 en Opus 5.5.
-2. Wat Claude Code zelf doet: in een echte sessie op Haiku 5.5, een beurt, dan een beurt waarbij
-   Jev een andere effort kiest, en in `/jev` kijken naar `(NN% cached)` van de tweede. Blijft dat
-   rond het niveau van de eerste, dan kost de wijziging niets; zakt het naar bijna 0, dan stuurt
-   Claude Code de top-level waarde en geldt voor Haiku 5.5 hetzelfde als voor Sonnet 5 (en moet
-   `holdsSonnetEffort` ook voor Haiku gelden). Stap 1 zegt wat de API kan; stap 2 wat Claude
-   Code gebruikt.
+Gemeten in Claude Code zelf, op een abonnement (geen API-key nodig), 2026-10-21, Claude Code
+2.1.306, `claude -p --effort …` in één sessie (`scripts/measure-effort-cache-cli.sh`):
+
+| Model | Wijziging | Gelezen | Geschreven |
+| --- | --- | --- | --- |
+| Haiku 5.5 | laag → hoog | 17.135 | 274 |
+| Haiku 5.5 | hoog → laag | 17.443 | 221 |
+| Haiku 5.5 | laag → medium | 17.664 | 34 |
+| Sonnet 5.5 | laag → hoog | 14.920 | 1.497 |
+| Sonnet 5.5 | hoog → laag | 16.358 | 135 |
+
+Een effort-wijziging herstart de cache dus **niet**, op Haiku 5.5 en Sonnet 5.5: de prompt van
+ongeveer 17k tokens wordt gelezen, niet opnieuw geschreven. Dat past bij de documentatie
+(per-bericht-effort). Voorbehouden: het gaat om `-p`-aanroepen met de vlag `--effort`, niet om de
+herschrijving die de plugin in `turn.step` doet; per model één reeks; en de aanroep direct na
+de eerste `--resume` (en bij Sonnet 5.5 ook een tweede, met gelijke effort) las 0 en schreef de
+hele prompt, ongeacht de effort. Dat is een ander effect dan de effort en nog niet verklaard.
+Gevolg voor de plugin: `holdsSonnetEffort` houdt een effort-wijziging op Sonnet vast om de
+cache te sparen; dat is gemeten op Sonnet 5 en lijkt voor Sonnet 5.5 niet nodig. Dat aanpassen
+doen we pas na een meting via de plugin zelf (stap 2 hieronder).
+
+Wat nog rest:
+1. `ANTHROPIC_API_KEY=… npm run measure-effort-cache` (`scripts/measure-effort-cache.mjs`, een
+   paar cent) meet op de API zelf de top-level en de per-bericht-variant naast elkaar. Alleen
+   nodig om te weten wat de API doet; voor Claude Code is bovenstaande meting wat telt.
+2. Via de plugin: in een sessie op Haiku 5.5 of Sonnet 5.5 een beurt, dan een beurt waarbij Jev
+   een andere effort kiest, en in `/jev` kijken naar `(NN% cached)` van de tweede.
 
 ## 5. Beslismodellen (de "decider")
 

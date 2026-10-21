@@ -220,16 +220,26 @@ const TIER_QUESTION: Record<StateSource, string> = {
  *
  * The model field is added by askJev depending on which provider is used.
  */
-export function requestBodyOf(state: string, offered: readonly Tier[], source: StateSource = "prompt") {
+export function requestBodyOf(
+  state: string,
+  offered: readonly Tier[],
+  source: StateSource = "prompt",
+  /**
+   * Other wording for the tier question, to try it out (scripts/bench): the
+   * description of some tiers, and the sentence the question opens with. The
+   * router itself passes none, and sends `TIER_CRITERIA`.
+   */
+  wording?: { criteria?: Partial<Record<Tier, string>>; instructions?: string },
+) {
   const criteria: Record<string, string> = {};
-  for (const tier of offered) criteria[tier] = TIER_CRITERIA[tier];
+  for (const tier of offered) criteria[tier] = wording?.criteria?.[tier] ?? TIER_CRITERIA[tier];
 
   return {
     state,
     questions: {
       tier: {
         type: "choice",
-        instructions: TIER_QUESTION[source],
+        instructions: wording?.instructions ?? TIER_QUESTION[source],
         criteria,
       },
       effort: {

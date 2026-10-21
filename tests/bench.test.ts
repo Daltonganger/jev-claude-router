@@ -18,7 +18,7 @@ import { seeded, typedPrompt } from "../scripts/bench/extract.mjs";
 // @ts-expect-error plain JavaScript modules
 import { merge } from "../scripts/bench/report.mjs";
 // @ts-expect-error plain JavaScript modules
-import { ask, catalog, layaCatalog, routerAsks, run, specOf } from "../scripts/bench/run.mjs";
+import { ask, catalog, layaCatalog, routerAsks, run, specOf, wordingOf } from "../scripts/bench/run.mjs";
 
 const row = (label: string, pick: string | null, confidence = 0.9, ms = 100, cost = 0.00001) => ({ label, pick, confidence, ms, cost });
 
@@ -186,6 +186,88 @@ describe("report on several results files", () => {
   });
 });
 
+describe("other wording for the tier question", () => {
+  test("a file of wording is read, and a mistake in it is an error, not a silent run on the old wording", () => {
+    const w = wordingOf({ criteria: { sonnet: "  a contained change  " }, instructions: "Which tier?" }, "v1");
+    assert.deepEqual(w, { name: "v1", criteria: { sonnet: "a contained change" }, instructions: "Which tier?" });
+    for (const bad of [null, [], "x", {}, { criteria: { sonet: "typo" } }, { criteria: { haiku: "" } }, { criteria: { haiku: 5 } }, { criteria: [] }, { instructions: "x".repeat(900) }, { crteria: {} }])
+      assert.throws(() => wordingOf(bad), undefined, JSON.stringify(bad)?.slice(0, 40));
+  });
+
+  test("the request carries the wording, and the router's own where none is given", async () => {
+    const s = await standIn();
+    try {
+      const wording = wordingOf({ criteria: { sonnet: "A contained change." }, instructions: "Pick the tier." }, "w");
+      await ask({ base: s.base, api: "decisions", key: "k", model: "m", prompt: "rename foo", wording });
+      await ask({ base: s.base, api: "decisions", key: "k", model: "m", prompt: "rename foo" });
+      assert.equal(s.seen[0]?.criteria.sonnet, "A contained change.");
+      assert.equal(s.seen[0]?.instructions, "Pick the tier.");
+      assert.match(s.seen[0]?.criteria.haiku ?? "", /^Trivial\./, "a tier not reworded keeps the router's description");
+      assert.match(s.seen[1]?.criteria.sonnet ?? "", /^Straightforward and minor/);
+      assert.match(s.seen[1]?.instructions ?? "", /^A developer typed this request/);
+    } finally {
+      s.close();
+    }
+  });
+
+  test("each wording is run on every model, after the router's own, and listed by name", async () => {
+    const s = await standIn();
+    try {
+      const w1 = wordingOf({ criteria: { sonnet: "A." } }, "wider");
+      const r = await run({ cases: cases.slice(0, 2), models: ["typesafe/jev-1.14", "unsure/model"], base: s.base, api: "decisions", key: "k", wordings: [w1] });
+      assert.deepEqual(Object.keys(r.rows), ["typesafe/jev-1.14", "typesafe/jev-1.14 [wider]", "unsure/model", "unsure/model [wider]"]);
+      assert.equal(s.seen.filter((x) => x.criteria.sonnet === "A.").length, 4);
+    } finally {
+      s.close();
+    }
+  });
+
+  test("the command line takes the files, names them, and refuses a bad one", async () => {
+    const s = await standIn();
+    const dir = mkdtempSync(join(tmpdir(), "bench-"));
+    try {
+      const casesFile = join(dir, "cases.jsonl");
+      writeFileSync(casesFile, cases.slice(0, 2).map((c) => JSON.stringify(c)).join("\n") + "\n");
+      writeFileSync(join(dir, "wider.json"), JSON.stringify({ criteria: { sonnet: "A contained change." } }));
+      writeFileSync(join(dir, "bad.json"), JSON.stringify({ criteria: { sonet: "typo" } }));
+      const script = new URL("../scripts/bench/run.mjs", import.meta.url).pathname;
+      const { execFile } = await import("node:child_process");
+      const go = (criteria: string) =>
+        new Promise<{ code: number; out: string; err: string }>((resolve) =>
+          execFile(process.execPath, ["--experimental-strip-types", script, "--cases", casesFile, "--models", "typesafe/jev-1.14", "--base", s.base, "--out", join(dir, "o.json"), "--criteria", criteria], { env: { ...process.env, OPENROUTER_API_KEY: "k" } }, (err, out, errText) =>
+            resolve({ code: err ? ((err as { code?: number }).code ?? 1) : 0, out, err: errText }),
+          ),
+        );
+      const ok = await go(join(dir, "wider.json"));
+      assert.equal(ok.code, 0);
+      assert.match(ok.out, /Wording: the router's own, then wider\. Choose on one set of prompts and confirm on another\./);
+      assert.match(ok.out, /\| typesafe\/jev-1\.14 \[wider\] \|/);
+      const bad = await go(join(dir, "bad.json"));
+      assert.equal(bad.code, 2);
+      assert.match(bad.err, /--criteria: bad: "sonet" is not a tier/);
+    } finally {
+      s.close();
+    }
+  });
+});
+
+describe("a second set that shares nothing with the first", () => {
+  test("--exclude leaves out the prompts already in another file", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bench-"));
+    const line = (text: string) => JSON.stringify({ type: "user", message: { role: "user", content: text } });
+    const prompts = ["rename the helper in utils", "add a null check to the parser", "explain this stack trace to me", "write a test for the exporter"];
+    writeFileSync(join(dir, "t.jsonl"), prompts.map(line).join("\n") + "\n");
+    const first = join(dir, "a.jsonl");
+    writeFileSync(first, [prompts[0], prompts[2]].map((p, i) => JSON.stringify({ id: i, prompt: p, tier: "sonnet" })).join("\n") + "\n");
+    const script = new URL("../scripts/bench/extract.mjs", import.meta.url).pathname;
+    const { execFileSync } = await import("node:child_process");
+    const out = join(dir, "b.jsonl");
+    execFileSync(process.execPath, ["--experimental-strip-types", script, "--dir", dir, "--n", "10", "--out", out, "--exclude", first]);
+    const got = readFileSync(out, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l).prompt).sort();
+    assert.deepEqual(got, [prompts[1], prompts[3]].sort());
+  });
+});
+
 describe("extract", () => {
   const user = (content: unknown, extra: object = {}) => JSON.stringify({ type: "user", message: { role: "user", content }, ...extra });
 
@@ -224,7 +306,7 @@ describe("extract", () => {
 
 /** A stand-in for OpenRouter's Decisions API: the tier follows a keyword in the state. */
 function standIn() {
-  const seen: { path: string; auth: string | undefined; model: string; questions: string[]; options: string[] }[] = [];
+  const seen: { path: string; auth: string | undefined; model: string; questions: string[]; options: string[]; criteria: Record<string, string>; instructions: string }[] = [];
   const server = createServer((req, res) => {
     let b = "";
     req.on("data", (c) => (b += c));
@@ -240,7 +322,7 @@ function standIn() {
         return;
       }
       const body = JSON.parse(b);
-      seen.push({ path: req.url ?? "", auth: req.headers.authorization, model: body.model, questions: Object.keys(body.questions), options: Object.keys(body.questions.tier.criteria) });
+      seen.push({ path: req.url ?? "", auth: req.headers.authorization, model: body.model, questions: Object.keys(body.questions), options: Object.keys(body.questions.tier.criteria), criteria: body.questions.tier.criteria, instructions: body.questions.tier.instructions });
       const state: string = body.state;
       if (body.model === "bad/model") {
         res.statusCode = 500;

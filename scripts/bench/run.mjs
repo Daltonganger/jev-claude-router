@@ -17,6 +17,11 @@
  *                               that is asked four things at once answers each slower, and the table's
  *                               latency would be the queue's, not the model's)
  *   --laya-catalog              list the models your Laya server offers (GET <laya>/v1/models) and exit
+ *   --criteria a.json,b.json    other wording for the tier descriptions, to try against the one the router
+ *                               sends (the built-in wording is always run first, so the others are compared
+ *                               with it). Each file: {"criteria": {"haiku": "...", "sonnet": "..."},
+ *                               "instructions": "..."}, any part of it. Tune on one set of prompts and confirm
+ *                               on another: wording picked on the set it is scored on is flattered by it.
  *   --tiers haiku,sonnet,opus   the tiers the model may choose from (default all four). Use the tiers the
  *                               router really offers you: on Pro with fable off, leave fable out, or the
  *                               model is asked to pick a tier you would never get.
@@ -29,6 +34,7 @@
  * prompts you are willing to send. Labels come from scripts/bench/label.mjs.
  */
 import { readFileSync, writeFileSync } from "node:fs";
+import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { requestBodyOf, stateOf } from "../../hooks/jev.ts";
@@ -38,6 +44,34 @@ import { agreement, report, summarize, table, TIERS } from "./metrics.mjs";
 
 const TIMEOUT_MS = 20_000;
 
+const MAX_WORDING = 800;
+
+/**
+ * Other wording for the tier question, from a file: `{ criteria, instructions }`.
+ * Unknown tiers and anything that is not a short string are refused, so a typo is
+ * an error and not a silent run on the built-in wording.
+ */
+export function wordingOf(raw, name = "wording") {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error(`${name}: not an object`);
+  const out = { name };
+  const text = (v, what) => {
+    if (typeof v !== "string" || v.trim() === "" || v.length > MAX_WORDING) throw new Error(`${name}: ${what} must be text of up to ${MAX_WORDING} characters`);
+    return v.trim();
+  };
+  for (const key of Object.keys(raw)) if (key !== "criteria" && key !== "instructions") throw new Error(`${name}: unknown key ${JSON.stringify(key)} (use "criteria" and "instructions")`);
+  if (raw.criteria !== undefined) {
+    if (typeof raw.criteria !== "object" || raw.criteria === null || Array.isArray(raw.criteria)) throw new Error(`${name}: "criteria" must map tiers to text`);
+    out.criteria = {};
+    for (const [tier, v] of Object.entries(raw.criteria)) {
+      if (!TIERS.includes(tier)) throw new Error(`${name}: ${JSON.stringify(tier)} is not a tier (${TIERS.join(", ")})`);
+      out.criteria[tier] = text(v, `the description of ${tier}`);
+    }
+  }
+  if (raw.instructions !== undefined) out.instructions = text(raw.instructions, "the instructions");
+  if (out.criteria === undefined && out.instructions === undefined) throw new Error(`${name}: nothing to change`);
+  return out;
+}
+
 /** `laya:multilingual` is a model on your Laya server; anything else is an OpenRouter model id. */
 export function specOf(spec) {
   const m = /^laya:(.+)$/.exec(spec);
@@ -45,10 +79,10 @@ export function specOf(spec) {
 }
 
 /** One question to one model. Resolves to a row; never throws. */
-export async function ask({ base, api, key, model, prompt, offered = TIERS, route = "openrouter", fetchImpl = fetch }) {
+export async function ask({ base, api, key, model, prompt, offered = TIERS, route = "openrouter", wording, fetchImpl = fetch }) {
   const laya = route === "laya";
   const path = laya ? "/v1/systemone" : api === "systemone" ? "/api/v1/systemone" : "/api/alpha/decisions";
-  const body = { ...requestBodyOf(stateOf(prompt), offered), model };
+  const body = { ...requestBodyOf(stateOf(prompt), offered, "prompt", wording), model };
   const started = performance.now();
   for (let attempt = 0; attempt < 2; attempt++) {
     const controller = new AbortController();
@@ -123,17 +157,22 @@ async function pool(items, size, fn) {
 }
 
 /** Runs every model over every case. Returns { rows: { model: row[] }, summaries, agreement }. */
-export async function run({ cases, models, base, api, key, layaBase, layaKey = "", concurrency = 4, layaConcurrency = 1, confidence = "probabilities", offered = TIERS, fetchImpl }) {
+export async function run({ cases, models, base, api, key, layaBase, layaKey = "", concurrency = 4, layaConcurrency = 1, confidence = "probabilities", offered = TIERS, wordings = [], fetchImpl }) {
   const rows = {};
+  // The built-in wording first, then each other; a model asked with several is listed once per wording.
+  const variants = [undefined, ...wordings];
   for (const spec of models) {
     const { route, model } = specOf(spec);
-    rows[spec] = await pool(cases, route === "laya" ? layaConcurrency : concurrency, async (c) => {
-      const r =
-        route === "laya"
-          ? await ask({ base: layaBase, api, key: layaKey, model, prompt: c.prompt, offered, route, fetchImpl })
-          : await ask({ base, api, key, model, prompt: c.prompt, offered, fetchImpl });
-      return { id: c.id, label: c.tier, ...r, confidence: confidence === "router" ? r.confidence : r.confidenceP };
-    });
+    for (const wording of variants) {
+      const label = wording === undefined ? spec : `${spec} [${wording.name}]`;
+      rows[label] = await pool(cases, route === "laya" ? layaConcurrency : concurrency, async (c) => {
+        const r =
+          route === "laya"
+            ? await ask({ base: layaBase, api, key: layaKey, model, prompt: c.prompt, offered, route, wording, fetchImpl })
+            : await ask({ base, api, key, model, prompt: c.prompt, offered, wording, fetchImpl });
+        return { id: c.id, label: c.tier, ...r, confidence: confidence === "router" ? r.confidence : r.confidenceP };
+      });
+    }
   }
   const summaries = Object.fromEntries(Object.entries(rows).map(([m, r]) => [m, summarize(r)]));
   return { rows, summaries, agreement: agreement(rows) };
@@ -215,8 +254,16 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const outside = cases.filter((c) => !offered.includes(c.tier)).length;
   if (outside > 0) console.log(`${outside} labelled prompts carry a tier that is not offered (${TIERS.filter((t) => !offered.includes(t)).join(", ")}); no model can match them.`);
   const models = wanted;
+  let wordings = [];
+  try {
+    wordings = arg("criteria", "").split(",").map((f) => f.trim()).filter(Boolean).map((f) => wordingOf(JSON.parse(readFileSync(f, "utf8")), basename(f).replace(/\.json$/, "")));
+  } catch (e) {
+    console.error(`--criteria: ${e.message}`);
+    process.exit(2);
+  }
+  if (wordings.length > 0) console.log(`Wording: the router's own, then ${wordings.map((w) => w.name).join(", ")}. Choose on one set of prompts and confirm on another.\n`);
   const mode = arg("confidence", "probabilities");
-  const result = await run({ cases, models, base, api: arg("api", "decisions"), key, layaBase: layaUrl.ok ? layaUrl.base : undefined, layaKey, concurrency: Number(arg("concurrency", "4")), layaConcurrency: Number(arg("laya-concurrency", "1")), confidence: mode, offered });
+  const result = await run({ cases, models, base, api: arg("api", "decisions"), key, layaBase: layaUrl.ok ? layaUrl.base : undefined, layaKey, concurrency: Number(arg("concurrency", "4")), layaConcurrency: Number(arg("laya-concurrency", "1")), confidence: mode, offered, wordings });
   console.log(`${cases.length} labelled prompts, ${models.length} models offered ${offered.join(", ")}, confidence read from ${mode === "router" ? "what the router reads" : "the probabilities"}\n`);
   console.log(table(result.summaries));
   for (const [model, rows] of Object.entries(result.rows)) {

@@ -29,6 +29,8 @@
 - **OpenRouter's Decisions API** (`JEV_ROUTER_API=decisions`) for the `openrouter`
   route, which also serves other decision models (`JEV_ROUTER_JEV_MODEL`). A model
   that is not Jev is read for its probabilities only and named on the route line.
+- **`bench:run --criteria`** tries other wording for the tier descriptions against the router's
+  own, and **`bench:extract --exclude`** draws a second set of prompts that shares none with the first.
 - **`LAYA_MODEL`** names the model on your Laya server without reaching the other
   providers in a list. `scripts/bench` asks a Laya server too (`laya:<model>`).
 - **`scripts/bench`** compares decision models on your own labelled prompts:

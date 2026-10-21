@@ -420,6 +420,13 @@ Conclusie voor de keuzes: Laya `multilingual` is snel genoeg en gratis, maar wer
 altijd sonnet kiest. Als terugval of voor privacy bruikbaar; als enige beslismodel mist het de besparing die
 Jev en Microsoft wel vinden (haiku herkennen).
 
+**Woordkeuze van de tiers (gebouwd, nog niet gemeten).** Alle modellen missen sonnet; wat de router ze over elke
+tier vertelt (`TIER_CRITERIA`) is de hefboom. `bench:run --criteria` laat varianten tegen de eigen tekst
+lopen; `scripts/bench/criteria/sonnet-wider.json` is een eerste, ongeteste gok van mij (haiku zonder
+codewijziging, sonnet als een afgebakende wijziging waar de vraag al zegt wat er moet gebeuren). Werkwijze: kies
+op set A, bevestig op een tweede set B zonder overlap (`bench:extract --exclude`), en let op drie dingen: de
+exacte score, of sonnet beter herkend wordt, en of te laag niet toeneemt. Een winnaar op A alleen telt niet.
+
 ## 6. Compaction
 
 - Voorlopig Claude's eigen compaction behouden, vanwege Laya's kleinere invoerbudget.

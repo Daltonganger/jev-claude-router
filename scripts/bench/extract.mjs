@@ -3,12 +3,15 @@
  * label. It reads locally and writes locally; nothing is sent anywhere. The
  * prompts are your work: keep the output out of the repo (it is in .gitignore).
  *
- *   node --experimental-strip-types scripts/bench/extract.mjs [--dir ~/.claude/projects] [--n 80] [--seed 1] [--out cases.jsonl]
+ *   node --experimental-strip-types scripts/bench/extract.mjs [--dir ~/.claude/projects] [--n 80] [--seed 1] [--out cases.jsonl] [--exclude cases.jsonl]
+ *
+ * `--exclude` leaves out the prompts already in another file, for a second set that shares nothing
+ * with the first (use it to confirm wording or a model chosen on the first).
  *
  * Writes one line per prompt: {"id", "prompt", "tier": null}. Label them with
  * scripts/bench/label.mjs.
  */
-import { createReadStream, readdirSync, statSync, writeFileSync } from "node:fs";
+import { createReadStream, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -69,6 +72,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const seed = Number(arg("seed", "1"));
   const out = arg("out", "cases.jsonl");
   const seen = new Set();
+  // Prompts already in another set count as seen: a second set must not share any with the first.
+  const excludeFile = arg("exclude", "");
+  if (excludeFile) for (const l of readFileSync(excludeFile, "utf8").split("\n").filter(Boolean)) seen.add(JSON.parse(l).prompt);
   const prompts = [];
   for (const file of jsonlFiles(dir)) {
     for await (const line of createInterface({ input: createReadStream(file), crlfDelay: Infinity })) {

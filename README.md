@@ -481,6 +481,16 @@ asking those again (same prompts, same `--tiers`). Prompts the router never send
 go-ahead, an engine nudge, a tier named in the prompt) are left out. The prompts go to
 OpenRouter and on to each provider.
 
+**Trying other wording for the tiers.** What the router tells the model each tier is for
+(`TIER_CRITERIA` in `hooks/policy.ts`) decides a lot. `bench:run -- --criteria a.json,b.json`
+asks the same models with other wording as well, after the router's own, and lists each as
+`model [a]`. A file holds `{"criteria": {"sonnet": "…"}, "instructions": "…"}`, any part of
+it; a tier it does not name keeps the router's description. `scripts/bench/criteria/sonnet-wider.json`
+is a starting point that has not been tried. Wording chosen on the prompts it is scored on is
+flattered by them, so choose on one set and confirm on another that shares nothing with it:
+`bench:extract -- --seed 2 --exclude cases.jsonl --out cases2.jsonl`. To use wording, put it in
+`TIER_CRITERIA`.
+
 **Routing**
 
 | Variable | Default | Effect |

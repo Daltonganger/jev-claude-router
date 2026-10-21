@@ -473,7 +473,7 @@ asks you for the tier each needs (1 haiku … 4 fable), and
 asks each model the router's own questions (`--tiers` limits the tiers on offer to the ones you really have: with Fable off, leave it out, or the models are asked to pick a tier you would never get) and prints, per model: how often it picks
 your tier, how often too low or too high, its calibration, how many answers clear the
 75% bar and how right those are, latency, and cost per thousand decisions, then your
-label counts, what always saying one tier would score, a confusion matrix per model and
+label counts, what always saying one tier would score (and costs: a rough index against following your labels, in the `cost vs your labels` column), a confusion matrix per model and
 a sign test against the first model. `npm run bench:report -- bench-results.json` prints
 it all again without asking anything; given several files (`bench:report -- a.json b.json`) it puts
 their models side by side, so a model run later is compared with the earlier ones without

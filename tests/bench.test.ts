@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { describe, test } from "node:test";
 
 // @ts-expect-error plain JavaScript modules
-import { agreement, baselines, combine, compare, confusion, labelCounts, percentile, report, summarize, table } from "../scripts/bench/metrics.mjs";
+import { agreement, baselines, combine, compare, confusion, costIndex, OUTPUT_PRICE, labelCounts, percentile, report, summarize, table } from "../scripts/bench/metrics.mjs";
 // @ts-expect-error plain JavaScript modules
 import { seeded, typedPrompt } from "../scripts/bench/extract.mjs";
 // @ts-expect-error plain JavaScript modules
@@ -287,6 +287,33 @@ describe("a second set that shares nothing with the first", () => {
     execFileSync(process.execPath, ["--experimental-strip-types", script, "--dir", dir, "--n", "10", "--out", out, "--exclude", first]);
     const got = readFileSync(out, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l).prompt).sort();
     assert.deepEqual(got, [prompts[1], prompts[3]].sort());
+  });
+});
+
+describe("what following a model costs against your labels", () => {
+  test("the index is the output prices of the picks over those of the labels", () => {
+    // labels: haiku 0.5 + sonnet 10 + opus 20 = 30.5; picks: sonnet 10 + sonnet 10 + opus 20 = 40
+    const rows = [row("haiku", "sonnet"), row("sonnet", "sonnet"), row("opus", "opus")];
+    assert.ok(Math.abs(costIndex(rows) - 40 / 30.5) < 1e-9);
+    assert.equal(costIndex(rows, () => "opus"), 60 / 30.5);
+    assert.equal(costIndex([row("skip", "opus"), row("opus", null)]), null);
+  });
+
+  test("a pick that is too low makes it cheaper, which is the point and the risk", () => {
+    assert.ok(costIndex([row("opus", "haiku")]) < 0.05);
+  });
+
+  test("the summary and the table carry it", () => {
+    const s = summarize([row("sonnet", "opus"), row("sonnet", "sonnet")]);
+    assert.equal(s.costVsLabels, 1.5);
+    assert.match(table({ m: s }), /\| 1\.50 \|$/m);
+    const text = report({ m: [row("sonnet", "sonnet"), row("opus", "sonnet")] }, {});
+    assert.match(text, /always haiku 0\.03, always sonnet 0\.67, always opus 1\.33/);
+  });
+
+  test("the prices are the router's own", async () => {
+    const { PRICE } = await import("../hooks/pricing.ts");
+    for (const tier of ["haiku", "sonnet", "opus", "fable"] as const) assert.equal(OUTPUT_PRICE[tier], PRICE[tier].output, tier);
   });
 });
 

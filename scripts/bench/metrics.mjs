@@ -9,6 +9,32 @@
 export const TIERS = ["haiku", "sonnet", "opus", "fable"];
 const rank = (t) => TIERS.indexOf(t);
 
+/**
+ * What a tier costs per million output tokens, in dollars: the router's own price table at
+ * 2026-10-21 (hooks/pricing.ts: Haiku 5.5 up to 100k, Sonnet 5.5, Opus 5.5, Fable 5.1).
+ * A test keeps this equal to that table.
+ */
+export const OUTPUT_PRICE = { haiku: 0.5, sonnet: 10, opus: 20, fable: 50 };
+
+/**
+ * A rough index of what following the picks costs against following your labels: the
+ * output price of each pick added up, over the same for each label. 1.00 is as much as your
+ * labels; below it is cheaper, above it dearer. It takes every prompt to need the same
+ * number of output tokens and your label to be the right tier, and it prices nothing
+ * for a pick that is too low, which is where a router loses quality.
+ */
+export function costIndex(rows, picks = (r) => r.pick) {
+  let followed = 0;
+  let labels = 0;
+  for (const r of rows) {
+    const pick = picks(r);
+    if (!TIERS.includes(r.label) || !TIERS.includes(pick)) continue;
+    followed += OUTPUT_PRICE[pick];
+    labels += OUTPUT_PRICE[r.label];
+  }
+  return labels === 0 ? null : followed / labels;
+}
+
 /** The p-th percentile (0..1) of numbers, nearest rank; null for none. */
 export function percentile(values, p) {
   const v = values.filter((x) => Number.isFinite(x)).sort((a, b) => a - b);
@@ -63,6 +89,7 @@ export function summarize(rows) {
     p50Ms: percentile(times, 0.5),
     p95Ms: percentile(times, 0.95),
     costPer1k: costs.length === 0 ? null : mean(costs) * 1000,
+    costVsLabels: costIndex(answered),
   };
 }
 
@@ -148,11 +175,11 @@ const usd = (x) => (x === null || x === undefined ? "–" : x < 0.01 ? `$${x.toF
 
 /** The summaries as a markdown table, one row per model. */
 export function table(summaries) {
-  const head = "| model | answered | exact | within 1 | too low | too high | ECE | ≥75% of answers (right) | mean / p95 | $ per 1k |";
-  const rule = "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |";
+  const head = "| model | answered | exact | within 1 | too low | too high | ECE | ≥75% of answers (right) | mean / p95 | $ per 1k | cost vs your labels |";
+  const rule = "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |";
   const rows = Object.entries(summaries).map(([model, s]) => {
     const b = s.bars[0.75];
-    return `| ${model} | ${s.answered}/${s.cases}${s.errors ? ` (${s.errors} err)` : ""} | ${pct(s.accuracy)} | ${pct(s.withinOne)} | ${pct(s.under)} | ${pct(s.over)} | ${s.ece === null ? "–" : s.ece.toFixed(3)} | ${pct(b.share)} (${pct(b.accuracy)}) | ${ms(s.meanMs)} / ${ms(s.p95Ms)} | ${usd(s.costPer1k)} |`;
+    return `| ${model} | ${s.answered}/${s.cases}${s.errors ? ` (${s.errors} err)` : ""} | ${pct(s.accuracy)} | ${pct(s.withinOne)} | ${pct(s.under)} | ${pct(s.over)} | ${s.ece === null ? "–" : s.ece.toFixed(3)} | ${pct(b.share)} (${pct(b.accuracy)}) | ${ms(s.meanMs)} / ${ms(s.p95Ms)} | ${usd(s.costPer1k)} | ${s.costVsLabels === null ? "–" : s.costVsLabels.toFixed(2)} |`;
   });
   return [head, rule, ...rows].join("\n");
 }
@@ -175,6 +202,11 @@ export function report(rows, summaries) {
   const out = [];
   out.push(`Your labels: ${TIERS.map((t) => `${t} ${counts[t]}`).join(", ")}`);
   out.push(`Never looking at the prompt and always saying one tier scores: ${TIERS.map((t) => `${t} ${pct(base[t])}`).join(", ")}`);
+  const always = (t) => costIndex(first, () => t);
+  out.push(
+    `Cost against following your labels (1.00), by the output price of each tier: always haiku ${always("haiku")?.toFixed(2)}, always sonnet ${always("sonnet")?.toFixed(2)}, always opus ${always("opus")?.toFixed(2)}. ` +
+      `A rough index: it prices no pick that is too low, which is where a router loses quality.`,
+  );
   for (const [model, r] of Object.entries(rows)) {
     const m = confusion(r);
     out.push(`\n${model}: your label (rows) against its pick (columns)`);

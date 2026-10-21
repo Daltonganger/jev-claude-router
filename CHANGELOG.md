@@ -31,6 +31,7 @@
   that is not Jev is read for its probabilities only and named on the route line.
 - **`bench:run --criteria`** tries other wording for the tier descriptions against the router's
   own, and **`bench:extract --exclude`** draws a second set of prompts that shares none with the first.
+- **`bench`** adds a rough cost index against your labels, from the router's own output prices.
 - **`LAYA_MODEL`** names the model on your Laya server without reaching the other
   providers in a list. `scripts/bench` asks a Laya server too (`laya:<model>`).
 - **`scripts/bench`** compares decision models on your own labelled prompts:

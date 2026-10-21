@@ -427,6 +427,29 @@ codewijziging, sonnet als een afgebakende wijziging waar de vraag al zegt wat er
 op set A, bevestig op een tweede set B zonder overlap (`bench:extract --exclude`), en let op drie dingen: de
 exacte score, of sonnet beter herkend wordt, en of te laag niet toeneemt. Een winnaar op A alleen telt niet.
 
+**Woordkeuze gemeten (2026-10-21, set A 79 prompts, set B 74 prompts zonder overlap, fable uit).** De eerste gok
+`sonnet-wider.json` (niet op deze sets afgestemd, dus beide sets zijn voor haar vers) heeft geen betrouwbaar
+effect:
+
+| | Set A exact | Set B exact | Sonnet goed (A + B van 57) |
+|---|---:|---:|---:|
+| Jev 1.14, eigen tekst | 53% | 46% | 8 |
+| Jev 1.14, `sonnet-wider` | 51% | 51% | 14 |
+| Microsoft Decision-1, eigen tekst | 48% | 59% | 13 |
+| Microsoft Decision-1, `sonnet-wider` | 49% | 57% | 7 |
+
+Jev wint 5 punten op B en verliest 2 op A; samen telt het 78 tegen 76 goed van 153 (tekentoets p ≈ 0,8). Microsoft
+wordt er slechter van op sonnet. Een eerste tekstwijziging verklein het sonnet-gat dus niet betrouwbaar, en
+verder afstemmen op 150 prompts is vragen om overfitting. Microsoft Decision-1 tegenover Jev (eigen tekst):
+set A Jev alleen goed 7, Microsoft 3 (p = 0,34); set B 2 tegen 12 (p = 0,01); samen 9 tegen 15 (p ≈ 0,31).
+
+**Kosten tegenover je eigen labels** (index met de uitvoerprijs per tier, 1,00 = precies je labels, zonder prijs
+voor een te lage keuze; de bench toont het nu als kolom): met de tabellen hierboven gerekend is Jev op set A
+1,12 en op B 1,45, Microsoft 0,95 en 1,13, "altijd sonnet" 1,17 en 1,58, "altijd opus" 2,34 en 3,16. Jev
+bespaart op deze prompts dus nauwelijks iets tegenover altijd sonnet, omdat hij te vaak opus kiest; Microsoft
+bespaart ruim 20% op A en 28% op B tegenover altijd sonnet. Voorbehoud: elke prompt telt even zwaar en je label
+geldt als de juiste tier.
+
 ## 6. Compaction
 
 - Voorlopig Claude's eigen compaction behouden, vanwege Laya's kleinere invoerbudget.

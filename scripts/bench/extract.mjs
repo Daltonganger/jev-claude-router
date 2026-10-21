@@ -5,7 +5,7 @@
  *
  *   node --experimental-strip-types scripts/bench/extract.mjs [--dir ~/.claude/projects] [--n 80] [--seed 1] [--out cases.jsonl] [--exclude cases.jsonl]
  *
- * `--exclude` leaves out the prompts already in another file, for a second set that shares nothing
+ * `--exclude a.jsonl,b.jsonl` leaves out the prompts already in other files, for a second set that shares nothing
  * with the first (use it to confirm wording or a model chosen on the first).
  *
  * Writes one line per prompt: {"id", "prompt", "tier": null}. Label them with
@@ -79,8 +79,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const out = arg("out", "cases.jsonl");
   const seen = new Set();
   // Prompts already in another set count as seen: a second set must not share any with the first.
-  const excludeFile = arg("exclude", "");
-  if (excludeFile) for (const l of readFileSync(excludeFile, "utf8").split("\n").filter(Boolean)) seen.add(JSON.parse(l).prompt);
+  // One file or several, separated by commas.
+  for (const excludeFile of arg("exclude", "").split(",").map((f) => f.trim()).filter(Boolean))
+    for (const l of readFileSync(excludeFile, "utf8").split("\n").filter(Boolean)) seen.add(JSON.parse(l).prompt);
   const prompts = [];
   for (const file of jsonlFiles(dir)) {
     for await (const line of createInterface({ input: createReadStream(file), crlfDelay: Infinity })) {

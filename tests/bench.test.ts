@@ -18,7 +18,7 @@ import { seeded, typedPrompt } from "../scripts/bench/extract.mjs";
 // @ts-expect-error plain JavaScript modules
 import { merge } from "../scripts/bench/report.mjs";
 // @ts-expect-error plain JavaScript modules
-import { barsReport, pool } from "../scripts/bench/bars.mjs";
+import { barsReport, checkBar, pool } from "../scripts/bench/bars.mjs";
 // @ts-expect-error plain JavaScript modules
 import { ask, catalog, layaCatalog, OPTIONS, routerAsks, run, specOf, unknownOption, wordingOf } from "../scripts/bench/run.mjs";
 
@@ -276,6 +276,23 @@ describe("options", () => {
 });
 
 describe("a second set that shares nothing with the first", () => {
+  test("--exclude takes several files", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bench-"));
+    const line = (text: string) => JSON.stringify({ type: "user", message: { role: "user", content: text } });
+    const prompts = ["rename the helper in utils", "add a null check to the parser", "explain this stack trace to me", "write a test for the exporter", "bump the version in package.json"];
+    writeFileSync(join(dir, "t.jsonl"), prompts.map(line).join("\n") + "\n");
+    const a = join(dir, "a.jsonl");
+    const b = join(dir, "b.jsonl");
+    writeFileSync(a, JSON.stringify({ id: 1, prompt: prompts[0], tier: "haiku" }) + "\n");
+    writeFileSync(b, JSON.stringify({ id: 1, prompt: prompts[3], tier: "haiku" }) + "\n");
+    const script = new URL("../scripts/bench/extract.mjs", import.meta.url).pathname;
+    const { execFileSync } = await import("node:child_process");
+    const out = join(dir, "c.jsonl");
+    execFileSync(process.execPath, ["--experimental-strip-types", script, "--dir", dir, "--n", "10", "--out", out, "--exclude", `${a},${b}`]);
+    const got = readFileSync(out, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l).prompt).sort();
+    assert.deepEqual(got, [prompts[1], prompts[2], prompts[4]].sort());
+  });
+
   test("--exclude leaves out the prompts already in another file", async () => {
     const dir = mkdtempSync(join(tmpdir(), "bench-"));
     const line = (text: string) => JSON.stringify({ type: "user", message: { role: "user", content: text } });
@@ -378,6 +395,15 @@ describe("where a bar would help", () => {
       ...[...Array(138)].map((_, i) => r(i < 66, 0.6)),
     ];
     assert.equal(suggestBar(jevLike), null);
+  });
+
+  test("one bar chosen beforehand is tested at the ordinary 5%", () => {
+    const text = checkBar({ m: informative }, 0.6);
+    assert.match(text, /^m: bar 60%: 20 of 40 answers reach it, 90% of those are right, 50% of the rest \(p = <?0\.\d+\): HOLDS at 5% and 10 points/);
+    // Equally right above and below the bar: not better.
+    const noise = [...Array(40)].map((_, i) => r(i % 4 < 2, i % 2 === 0 ? 0.9 : 0.6));
+    assert.match(checkBar({ m: noise }, 0.8), /does not hold at 5% and 10 points/);
+    assert.match(checkBar({ m: informative }, 0.99), /too few on one side to say\): nothing to test/);
   });
 
   test("results files are pooled per model name", () => {

@@ -481,6 +481,16 @@ Microsoft (eigen tekst van de router) goed van fout scheidt, dus `bars` in `cata
 - Jev op set A alleen, met balken vanaf 20%: de antwoorden onder 25% zijn maar 21% goed (4 van 19), de rest 58%
   (p = 0,002). Dat zit onderaan, niet bij de hoge balken waar de standaard van 75% op mikt. Of dat ook op set A + B
   zo is, is nog niet gezien (de eerdere A + B-tabel begon bij 50%).
+- **Het lage-balk-spoor voor Jev bevestigd niet** (set A + B, balken vanaf 20%): 51% goed boven 25%, tegen 50% overall;
+  de beste p's (0,027 tot 0,046 bij 35% tot 60%) halen de strenge grens niet. Wat op set A alleen opviel (antwoorden
+  onder 25% zijn 21% goed) zit er na toevoeging van set B niet meer in. Jev en Microsoft (eigen tekst): geen balk.
+- Microsoft met `sonnet-wider` (set A + B): bij 85% is 64% goed voor 55% van de antwoorden, tegen 53% overall
+  (p < 0,001); bij 90% 65% (p = 0,003). Dezelfde data waarin het gevonden is, dus nog niet bevestigd.
+  **Vooraf vastgelegde toets op een derde set (C, zonder overlap met A en B):** Microsoft Decision-1 met
+  `scripts/bench/criteria/sonnet-wider.json`, één balk, 0,85. Het houdt stand als op set C de antwoorden vanaf 0,85
+  minstens 10 punten vaker goed zijn dan de rest, met p < 0,05 (één toets, dus geen strenge grens). Anders niet, en dan
+  gaat er niets in de catalogus. Opdrachten: `bench:extract -- --seed 3 --exclude cases.jsonl,cases2.jsonl --out
+  cases3.jsonl`, labelen, `bench:run` met die ene wording, en `bench:bars -- --bar 0.85 wording-c.json`.
 - Opvallend maar post hoc: Microsoft met de ruimere tierbeschrijving (`sonnet-wider`) heeft wel een scheiding: bij
   een balk van 85% is 64% van de antwoorden goed (55% van alle), tegen 39% eronder (p ≈ 0,001; bij 90%: 65% tegen
   43%, p ≈ 0,003). Dit is gevonden door 40 combinaties van model, tekst en balk te bekijken, dus het geldt pas als

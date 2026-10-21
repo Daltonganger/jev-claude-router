@@ -475,7 +475,7 @@ your tier, how often too low or too high, its calibration, how many answers clea
 75% bar and how right those are, latency, and cost per thousand decisions, then your
 label counts, what always saying one tier would score (and costs: a rough index against following your labels, in the `cost vs your labels` column), a confusion matrix per model and
 a sign test against the first model. `npm run bench:report -- bench-results.json` prints
-it all again without asking anything (`bench:bars` shows, per model, how many answers reach each confidence bar and how often those are right, and suggests one if any bar helps); given several files (`bench:report -- a.json b.json`) it puts
+it all again without asking anything (`bench:bars` shows, per model, how many answers reach each confidence bar and how often those are right, and suggests one if any bar helps; `bench:bars -- --bar 0.85 results.json` tests one bar chosen beforehand on prompts that were not used to choose it); given several files (`bench:report -- a.json b.json`) it puts
 their models side by side, so a model run later is compared with the earlier ones without
 asking those again (same prompts, same `--tiers`). Prompts the router never sends to the model (a bare
 go-ahead, an engine nudge, a tier named in the prompt) are left out. The prompts go to

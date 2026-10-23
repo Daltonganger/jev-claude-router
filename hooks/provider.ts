@@ -5,7 +5,7 @@
  * Precedence:
  * 1. JEV_ROUTER_PROVIDER forces one, or a list tried in order
  *    (`laya,openrouter`): typesafe, gateway, openrouter, commandcode,
- *    opencode, laya. A named route whose key or URL is missing is an error.
+ *    opencode, laya, vllm. A named route whose key or URL is missing is an error.
  * 2. TypeSafe direct if TYPESAFE_API_KEY is set
  * 3. Laya if LAYA_BASE_URL is set
  * 4. Gateway if AI_GATEWAY_API_KEY is set
@@ -36,7 +36,7 @@
  * TypeSafe's own advice is to pin (`jev-1.13.0` on api.typesafe.ai).
  */
 
-export type RouteName = "typesafe" | "gateway" | "openrouter" | "commandcode" | "opencode" | "laya";
+export type RouteName = "typesafe" | "gateway" | "openrouter" | "commandcode" | "opencode" | "laya" | "vllm";
 
 export type ProviderOk = {
   ok: true;
@@ -72,6 +72,9 @@ export type ProviderEnv = {
   LAYA_API_KEY?: string | undefined;
   /** The model on your Laya server (`multilingual`); wins over JEV_ROUTER_JEV_MODEL, which in a list of providers would reach them all. */
   LAYA_MODEL?: string | undefined;
+  VLLM_SR_API_KEY?: string | undefined;
+  /** The model on vLLM Semantic Router; wins over JEV_ROUTER_JEV_MODEL, which is Jev's id and reaches every route in a list. */
+  VLLM_SR_MODEL?: string | undefined;
 };
 
 const TYPESAFE_MODEL_DEFAULT = "jev-latest";
@@ -116,13 +119,15 @@ export function confidenceSourceOf(name: RouteName, model?: string): "jev" | "x_
  */
 const OPENROUTER_DECISIONS = "https://openrouter.ai/api/alpha/decisions";
 
-const FIXED: Record<"openrouter" | "commandcode" | "opencode", { endpoint: string; model: string | null; keyEnv: keyof ProviderEnv }> = {
+const FIXED: Record<"openrouter" | "commandcode" | "opencode" | "vllm", { endpoint: string; model: string | null; keyEnv: keyof ProviderEnv }> = {
   // Jev 1.14 on OpenRouter: https://openrouter.ai/typesafe/jev-1.14
   openrouter: { endpoint: "https://openrouter.ai/api/v1/systemone", model: "typesafe/jev-1.14", keyEnv: "OPENROUTER_API_KEY" },
   // Provider API, GOAT plan and above: https://commandcode.ai/models/jev-1-14-0
   commandcode: { endpoint: "https://api.commandcode.ai/provider/v1/systemone", model: "typesafe/jev-1.14.0", keyEnv: "COMMANDCODE_API_KEY" },
   // OpenCode Console endpoint; its model id for Jev 1.14 is not confirmed.
   opencode: { endpoint: "https://opencode.ai/inference/systemone/v1/systemone", model: null, keyEnv: "OPENCODE_API_KEY" },
+  // vLLM Semantic Router's decision endpoint (System One shape). Not Jev: its answers are read for probabilities.
+  vllm: { endpoint: "https://decision.vllm-sr.ai/v1/systemone", model: "vllm-sr/d3-turbo", keyEnv: "VLLM_SR_API_KEY" },
 };
 
 /**
@@ -260,7 +265,7 @@ function build(name: RouteName, env: ProviderEnv): ProviderResult {
       const route = FIXED[name];
       const key = keyOf(env[route.keyEnv]);
       if (!key) return { ok: false, reason: `JEV_ROUTER_PROVIDER=${name} but ${String(route.keyEnv)} is not set` };
-      const model = pinned || route.model;
+      const model = (name === "vllm" ? (env.VLLM_SR_MODEL ?? "").trim() : pinned) || route.model;
       if (!model) return { ok: false, reason: `${name} needs JEV_ROUTER_JEV_MODEL: its model id for Jev is not known to the router` };
       const decisions = name === "openrouter" && (env.JEV_ROUTER_API ?? "").trim().toLowerCase() === "decisions";
       return {
@@ -288,6 +293,9 @@ const NAMES: Record<string, RouteName> = {
   "command-code": "commandcode",
   opencode: "opencode",
   laya: "laya",
+  vllm: "vllm",
+  "vllm-sr": "vllm",
+  semantic: "vllm",
 };
 
 /** The checks every built route goes through before it is used. */
@@ -305,12 +313,13 @@ function checked(p: ProviderResult, env: ProviderEnv): ProviderResult {
     commandcode: "COMMANDCODE_API_KEY",
     opencode: "OPENCODE_API_KEY",
     laya: "LAYA_API_KEY",
+    vllm: "VLLM_SR_API_KEY",
   }[p.name];
   const noKeyNeeded = p.name === "laya" && p.apiKey === "";
   if (!noKeyNeeded && !/^[\x21-\x7e]+$/.test(p.apiKey))
     return { ok: false, reason: `${keyName} has a line break, space or other character a key cannot have` };
   if (p.name !== "gateway" && !/^[\w.:/@+-]{1,100}$/.test(p.model))
-    return { ok: false, reason: "JEV_ROUTER_JEV_MODEL is not a model id" };
+    return { ok: false, reason: "JEV_ROUTER_JEV_MODEL (or VLLM_SR_MODEL) is not a model id" };
   void env;
   return p;
 }
@@ -333,7 +342,8 @@ export function providersOf(raw: ProviderEnv): { ok: true; providers: ProviderOk
   // An unknown name falls back to choosing by the keys set, as before.
   const wanted: RouteName[] = [...new Set(named)];
   if (wanted.length === 0) {
-    if (env.TYPESAFE_API_KEY) wanted.push("typesafe");
+    if (keyOf(env.VLLM_SR_API_KEY)) wanted.push("vllm");
+    else if (env.TYPESAFE_API_KEY) wanted.push("typesafe");
     else if ((env.LAYA_BASE_URL ?? "").trim()) wanted.push("laya");
     else if (env.AI_GATEWAY_API_KEY) wanted.push("gateway");
     else return { ok: false, reason: "no TYPESAFE_API_KEY or AI_GATEWAY_API_KEY" };

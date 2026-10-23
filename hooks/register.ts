@@ -535,6 +535,8 @@ async function seedSettings(
     LAYA_BASE_URL: await $.env.get("LAYA_BASE_URL"),
     LAYA_API_KEY: await $.env.get("LAYA_API_KEY"),
     LAYA_MODEL: await $.env.get("LAYA_MODEL"),
+    VLLM_SR_API_KEY: await $.env.get("VLLM_SR_API_KEY"),
+    VLLM_SR_MODEL: await $.env.get("VLLM_SR_MODEL"),
   });
   return {
     provider: routes.ok ? routes.providers[0]! : routes,

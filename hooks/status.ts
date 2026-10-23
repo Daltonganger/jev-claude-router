@@ -1189,6 +1189,7 @@ export function statusReport(status: Status): string {
       commandcode: "COMMANDCODE_API_KEY",
       opencode: "OPENCODE_API_KEY",
       laya: "LAYA_BASE_URL",
+      vllm: "VLLM_SR_API_KEY",
     }[status.provider.name];
     lines.push(
       `  provider  ${status.provider.name} · ${key} is set · ${plain(status.provider.model)}` +

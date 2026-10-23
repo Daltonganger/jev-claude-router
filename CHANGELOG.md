@@ -12,6 +12,7 @@
 
 ### Features
 
+- **vLLM Semantic Router is a route** (`JEV_ROUTER_PROVIDER=vllm`, key in `VLLM_SR_API_KEY`, model `vllm-sr/d3-turbo`, endpoint `https://decision.vllm-sr.ai/v1/systemone`). `vllm,openrouter` asks vLLM first and Jev on OpenRouter when it fails. Its answers are read for their probabilities, like other non-Jev decision models.
 - **Haiku 5.5 is the haiku tier** (`claude-haiku-5-5`, a 1M window). Its price
   depends on the request: a prompt over 100k tokens, cache reads and writes
   included, pays the higher prices. The cost line and the downgrade and upgrade

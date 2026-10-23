@@ -386,6 +386,42 @@ describe("OpenRouter, Command Code and OpenCode", () => {
     });
   });
 
+  it("vLLM Semantic Router: its decision endpoint and d3-turbo, not Jev's id", () => {
+    assert.deepStrictEqual(providerOf(env({ JEV_ROUTER_PROVIDER: "vllm", VLLM_SR_API_KEY: "sk-test" })), {
+      ok: true,
+      name: "vllm",
+      endpoint: "https://decision.vllm-sr.ai/v1/systemone",
+      model: "vllm-sr/d3-turbo",
+      apiKey: "sk-test",
+    });
+    const pinned = providerOf(env({ JEV_ROUTER_PROVIDER: "vllm", VLLM_SR_API_KEY: "k", JEV_ROUTER_JEV_MODEL: "typesafe/jev-1.14" }));
+    assert.ok(pinned.ok);
+    assert.strictEqual(pinned.model, "vllm-sr/d3-turbo", "Jev's id never reaches this route");
+    const own = providerOf(env({ JEV_ROUTER_PROVIDER: "vllm", VLLM_SR_API_KEY: "k", VLLM_SR_MODEL: "vllm-sr/other" }));
+    assert.ok(own.ok);
+    assert.strictEqual(own.model, "vllm-sr/other");
+    assert.strictEqual(labelOf("vllm", "vllm-sr/d3-turbo"), "d3-turbo");
+    assert.strictEqual(confidenceSourceOf("vllm", "vllm-sr/d3-turbo"), "probabilities");
+  });
+
+  it("vLLM first, OpenRouter's Jev as the backup", () => {
+    const all = providersOf(env({ JEV_ROUTER_PROVIDER: "vllm,openrouter", VLLM_SR_API_KEY: "v", OPENROUTER_API_KEY: "o", JEV_ROUTER_JEV_MODEL: "typesafe/jev-1.14" }));
+    assert.ok(all.ok);
+    assert.deepStrictEqual(all.providers.map((p) => [p.name, p.model]), [["vllm", "vllm-sr/d3-turbo"], ["openrouter", "typesafe/jev-1.14"]]);
+  });
+
+  it("the vLLM key alone chooses it, and OpenRouter's key does not join it uninvited", () => {
+    const p = providersOf(env({ VLLM_SR_API_KEY: "v", OPENROUTER_API_KEY: "o" }));
+    assert.ok(p.ok);
+    assert.deepStrictEqual(p.providers.map((x) => x.name), ["vllm"]);
+  });
+
+  it("a key with a space is refused by name", () => {
+    const p = providerOf(env({ JEV_ROUTER_PROVIDER: "vllm", VLLM_SR_API_KEY: "a b" }));
+    assert.ok(!p.ok);
+    assert.match(p.reason, /VLLM_SR_API_KEY/);
+  });
+
   it("OpenCode needs its model id given: the router does not know it", () => {
     const missing = providerOf(env({ JEV_ROUTER_PROVIDER: "opencode", OPENCODE_API_KEY: "oc" }));
     assert.ok(!missing.ok);

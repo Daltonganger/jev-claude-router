@@ -119,6 +119,11 @@ last 20 sessions.
    Or place the folder at `~/.claude/skills/jev-claude-router/` to load
    it in every session, or run `claude --plugin-dir /path/to/jev-claude-router` for
    one session.
+   **In Claude Code on the web (cloud sessions).** A session loads the plugin when the repository it runs on
+   has `.claude/settings.json` with the marketplace and `enabledPlugins` (this repository has it; copy the file
+   to others). Put the keys in the cloud environment's variables, never in the file, and allow `openrouter.ai`
+   (and `decision.vllm-sr.ai`) under Allowed domains. A cloud session may not accept a model switch, so check
+   `/jev` and the route line.
 4. **Check it.** `npm run check-jev` reports the provider and whether it
    answers. In a session, `/jev` shows the router's state.
 

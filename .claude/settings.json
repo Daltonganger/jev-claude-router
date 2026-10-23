@@ -1,0 +1,13 @@
+{
+  "extraKnownMarketplaces": {
+    "jev-claude-router": {
+      "source": { "source": "github", "repo": "Daltonganger/jev-claude-router" }
+    }
+  },
+  "enabledPlugins": {
+    "jev-claude-router@jev-claude-router": true
+  },
+  "env": {
+    "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1"
+  }
+}

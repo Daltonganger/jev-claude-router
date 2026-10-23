@@ -8,7 +8,7 @@
   into it.
 -->
 
-## Unreleased
+## 1.2.0 — 2026-10-23
 
 ### Features
 
@@ -55,6 +55,13 @@
   `scripts/measure-effort-cache-cli.sh` (your own Claude login) measure, for one
   model, whether changing effort restarts the prompt cache. On Haiku 5.5 and
   Sonnet 5.5 in Claude Code 2.1.306 it does not.
+
+### Chores
+
+- **Updates follow the latest commit.** `.claude-plugin/plugin.json` no longer
+  carries a `version`, so Claude Code takes the commit SHA of the marketplace
+  as the plugin's version and every push to the default branch reaches installed
+  copies on their next update. `package.json` keeps the release number.
 
 ### Fixes
 

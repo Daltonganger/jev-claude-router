@@ -414,6 +414,97 @@ export async function askJevChain(args: ChainArgs): Promise<JevResult> {
   return { ok: false, reason, ms: now() - started };
 }
 
+/**
+ * How long an answer from a later provider in the list waits for an earlier
+ * one still asking, before it is taken. The order is a preference (the first
+ * named is the one wanted), not only a fallback. `JEV_ROUTER_PREFER_MS`
+ * overrides it.
+ */
+export const DEFAULT_PREFER_MS = 300;
+
+/** The grace from the environment, or the default when it is unusable. 0 takes the first answer. */
+export function preferOf(raw: string | undefined): number {
+  const v = (raw ?? "").trim();
+  if (!PLAIN_DECIMAL.test(v)) return DEFAULT_PREFER_MS;
+  return Math.min(Number(v), MAX_TIMEOUT_MS);
+}
+
+/**
+ * Asks every provider at once, each with the whole budget, and answers with
+ * the first in list order that answers: a later one that answers sooner waits
+ * `preferMs` for an earlier one still asking, then is taken. A provider that
+ * times out no longer spends the others' time, as it does in `askJevChain`,
+ * so `vllm,openrouter` still routes when vLLM is slow. Every provider is
+ * billed for its question either way (about $0.00003 each).
+ */
+export async function askJevRace(args: ChainArgs & { preferMs?: number }): Promise<JevResult> {
+  const providers = args.providers;
+  if (providers.length <= 1) return askJevChain(args);
+  const now = args.now ?? (() => Date.now());
+  const started = now();
+  const prefer = args.preferMs ?? DEFAULT_PREFER_MS;
+  const results: (JevResult | undefined)[] = providers.map(() => undefined);
+
+  return new Promise<JevResult>((resolve) => {
+    let done = false;
+    let grace: AbortController | null = null;
+    const finish = (result: JevResult) => {
+      if (done) return;
+      done = true;
+      grace?.abort();
+      resolve({ ...result, ms: now() - started });
+    };
+    // The answer to take: the first in order that answered, waiting on an
+    // earlier one still asking unless `skipPending`.
+    const pick = (skipPending: boolean): JevResult | null => {
+      for (const r of results) {
+        if (r === undefined) {
+          if (skipPending) continue;
+          return null;
+        }
+        if (r.ok || r.reason === "ceded") return r;
+      }
+      return null;
+    };
+    const failure = (): JevResult => {
+      const failures = providers.map((p, i) => ({ name: p.name, reason: (results[i] as { reason?: string } | undefined)?.reason ?? "no answer" }));
+      return {
+        ok: false,
+        reason: failures.map((f) => (f.reason.startsWith(f.name) ? f.reason : `${f.name}: ${f.reason}`)).join("; "),
+        ms: 0,
+      };
+    };
+    const settle = () => {
+      if (done) return;
+      if (results.every((r) => r !== undefined)) return finish(pick(true) ?? failure());
+      const taken = pick(false);
+      if (taken) return finish(taken);
+      if (grace === null && results.some((r) => r?.ok)) {
+        grace = new AbortController();
+        args.sleep(prefer, { signal: grace.signal }).then(
+          () => {
+            const late = pick(true);
+            if (late) finish(late);
+          },
+          () => undefined,
+        );
+      }
+    };
+    providers.forEach((provider, i) => {
+      askJev({ ...args, provider }).then(
+        (r) => {
+          results[i] = r;
+          settle();
+        },
+        (error) => {
+          results[i] = { ok: false, reason: messageOf(error), ms: 0 };
+          settle();
+        },
+      );
+    });
+  });
+}
+
 /** The provider's own error type, when it sent one, for the status line. */
 export function providerNoteOf(response: HttpResponseLike): string {
   try {

@@ -4,8 +4,11 @@ import { describe, test } from "node:test";
 import {
   askJev,
   askJevChain,
+  askJevRace,
+  DEFAULT_PREFER_MS,
   DEFAULT_TIMEOUT_MS,
   MAX_TIMEOUT_MS,
+  preferOf,
   requestBodyOf,
   timeoutOf,
   type HttpInitLike,
@@ -655,5 +658,135 @@ describe("a Laya server and a chain of providers", () => {
     assert.ok(!r.ok);
     assert.equal(r.reason, "ceded");
     assert.equal(calls, 1);
+  });
+});
+
+describe("askJevRace: every provider at once, the first named preferred", () => {
+  const laya: ProviderOk = { ok: true, name: "laya", endpoint: "https://nas.lan/v1/systemone", model: "laya", apiKey: "" };
+  const openrouter: ProviderOk = {
+    ok: true,
+    name: "openrouter",
+    endpoint: "https://openrouter.ai/api/v1/systemone",
+    model: "typesafe/jev-1.14",
+    apiKey: "or-key",
+  };
+  const answer = answered({ answers: { tier: { type: "choice", choice: "opus" } } });
+  const down: HttpResponseLike = { ok: false, status: 503, text: "" };
+  const base = { state: "refactor the parser", offered: TIERS, timeoutMs: 1500 };
+
+  /** A promise to settle by hand. */
+  function later<T>() {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>((r) => (resolve = r));
+    return { promise, resolve };
+  }
+  /** Timers that fire only when told: the budget (1500) never, the grace on `graceFires`. */
+  function clock() {
+    const grace = later<undefined>();
+    const sleeps: number[] = [];
+    return {
+      sleeps,
+      fireGrace: () => grace.resolve(undefined),
+      sleep: (ms: number, options?: { signal?: AbortSignal }) => {
+        sleeps.push(ms);
+        if (ms === 1500) return never();
+        return new Promise<undefined>((res, rej) => {
+          options?.signal?.addEventListener("abort", () => rej(new Error("aborted")));
+          void grace.promise.then(res);
+        });
+      },
+    };
+  }
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+
+  test("both are asked at once", async () => {
+    const urls: string[] = [];
+    const r = await askJevRace({ ...base, sleep: clock().sleep, providers: [laya, openrouter], fetch: async (url: string) => (urls.push(url), answer) });
+    assert.ok(r.ok);
+    assert.equal(r.via, "laya");
+    assert.deepEqual(urls.sort(), ["https://nas.lan/v1/systemone", "https://openrouter.ai/api/v1/systemone"]);
+  });
+
+  test("a later answer waits for the first named, which wins inside the grace", async () => {
+    const first = later<HttpResponseLike>();
+    const c = clock();
+    const result = askJevRace({
+      ...base,
+      sleep: c.sleep,
+      providers: [laya, openrouter],
+      fetch: async (url: string) => (url.includes("nas.lan") ? first.promise : answer),
+    });
+    await tick();
+    assert.ok(c.sleeps.includes(DEFAULT_PREFER_MS), "the grace started once OpenRouter answered");
+    first.resolve(answer);
+    const r = await result;
+    assert.ok(r.ok);
+    assert.equal(r.via, "laya");
+  });
+
+  test("past the grace the later answer is taken", async () => {
+    const c = clock();
+    const result = askJevRace({
+      ...base,
+      sleep: c.sleep,
+      providers: [laya, openrouter],
+      fetch: async (url: string) => (url.includes("nas.lan") ? never() : answer),
+    });
+    await tick();
+    c.fireGrace();
+    const r = await result;
+    assert.ok(r.ok);
+    assert.equal(r.via, "openrouter");
+  });
+
+  test("a slow first provider no longer leaves the turn unrouted", async () => {
+    const r = await askJevRace({
+      ...base,
+      timeoutMs: 200,
+      preferMs: 0,
+      // The budget runs out a moment later; the grace is none.
+      sleep: (ms: number) => (ms === 0 ? Promise.resolve(undefined) : new Promise<undefined>((r) => setTimeout(() => r(undefined), 20))),
+      providers: [laya, openrouter],
+      fetch: async (url: string) => (url.includes("nas.lan") ? never() : answer),
+    });
+    assert.ok(r.ok);
+    assert.equal(r.via, "openrouter");
+  });
+
+  test("an earlier provider that fails at once does not hold the later answer", async () => {
+    const c = clock();
+    const r = await askJevRace({ ...base, sleep: c.sleep, providers: [laya, openrouter], fetch: async (url: string) => (url.includes("nas.lan") ? down : answer) });
+    assert.ok(r.ok);
+    assert.equal(r.via, "openrouter");
+    assert.ok(!c.sleeps.includes(DEFAULT_PREFER_MS), "no grace: nothing earlier is still asking");
+  });
+
+  test("all failing says who said what", async () => {
+    const r = await askJevRace({ ...base, sleep: clock().sleep, providers: [laya, openrouter], fetch: async () => down });
+    assert.ok(!r.ok);
+    assert.equal(r.reason, "laya said HTTP 503; openrouter said HTTP 503");
+  });
+
+  test("a turn ceded to a newer copy stops the race", async () => {
+    const abort = new AbortController();
+    const result = askJevRace({ ...base, signal: abort.signal, sleep: clock().sleep, providers: [laya, openrouter], fetch: async () => never() });
+    abort.abort();
+    const r = await result;
+    assert.ok(!r.ok);
+    assert.equal(r.reason, "ceded");
+  });
+
+  test("one provider asks as the chain does", async () => {
+    const r = await askJevRace({ ...base, sleep: clock().sleep, providers: [laya], fetch: async () => down });
+    assert.ok(!r.ok);
+    assert.equal(r.reason, "laya said HTTP 503");
+  });
+
+  test("the grace from the environment", () => {
+    assert.equal(preferOf(undefined), DEFAULT_PREFER_MS);
+    assert.equal(preferOf("0"), 0);
+    assert.equal(preferOf("150"), 150);
+    assert.equal(preferOf("soon"), DEFAULT_PREFER_MS);
+    assert.equal(preferOf("99999"), MAX_TIMEOUT_MS);
   });
 });

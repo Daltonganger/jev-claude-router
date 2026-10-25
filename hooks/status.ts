@@ -495,6 +495,9 @@ export type Status = {
   provider: ProviderResult;
   /** Every provider, in the order they are tried; absent on older callers. */
   providers?: readonly string[];
+  /** The providers are asked at once (the first named preferred, waiting `preferMs`); absent or false: one after another. */
+  parallel?: boolean;
+  preferMs?: number;
   timeoutMs: number;
   /** The confidence a switch must clear, or null when stickiness is off. */
   sticky: number | null;
@@ -1198,7 +1201,11 @@ export function statusReport(status: Status): string {
           : ""),
     );
     if (status.providers !== undefined && status.providers.length > 1)
-      lines.push(`  fallback  ${status.providers.join(" → ")} (the next is asked when one fails at once)`);
+      lines.push(
+        status.parallel
+          ? `  deciders  ${status.providers.join(", ")} at once (the first named wins if it answers within ${status.preferMs ?? 0}ms of another)`
+          : `  fallback  ${status.providers.join(" → ")} (the next is asked when one fails at once)`,
+      );
   } else {
     // The reason names the fix: a missing key, a bad base URL, a provider
     // forced without its key. "No keys" alone sent people after the wrong one.

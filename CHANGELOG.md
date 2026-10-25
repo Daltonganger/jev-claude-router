@@ -8,6 +8,23 @@
   into it.
 -->
 
+## Unreleased
+
+### Features
+
+- **Several decision models are asked at once.** With a list in
+  `JEV_ROUTER_PROVIDER`, every provider is asked together with the whole
+  budget, and the first in list order that answers is taken; a later one that
+  answers sooner waits `JEV_ROUTER_PREFER_MS` (300) for an earlier one still
+  asking. A slow first provider no longer spends the others' time and leaves
+  the turn unrouted. `JEV_ROUTER_PARALLEL=0` asks them one after another, as
+  before. `/jev` says which.
+
+### Fixes
+
+- `npm run typecheck` passes again: a score answer's `probabilities` was read
+  without being in its type.
+
 ## 1.2.0 — 2026-10-23
 
 ### Features

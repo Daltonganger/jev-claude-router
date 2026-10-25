@@ -5772,7 +5772,23 @@ describe("register: Laya and a chain of providers (2026-10-21)", () => {
     assert.equal(kit.asked()[1]?.authorization, "Bearer or-key");
     assert.equal(kit.asked()[0]?.authorization, undefined, "the OpenRouter key never went to the NAS");
     assert.match(t.text, /opus · .* · Jev 97%/, "answered by Jev through OpenRouter, so it reads as Jev");
+    assert.match(await report(kit), /deciders\s+laya, openrouter at once/);
+  });
+
+  test("JEV_ROUTER_PARALLEL=0 asks them one after another, as before", async () => {
+    const kit = await started({ LAYA_BASE_URL: "https://nas.lan", OPENROUTER_API_KEY: "or-key", JEV_ROUTER_PROVIDER: "laya,openrouter", JEV_ROUTER_PARALLEL: "0" });
+    kit.setTier("opus", 0.97, 2, 0.9);
+    await turn(kit, "l9");
+    assert.deepEqual(kit.asked().map((a) => a.url), ["https://nas.lan/v1/systemone"], "Laya answered, so OpenRouter was never asked");
     assert.match(await report(kit), /fallback\s+laya → openrouter/);
+  });
+
+  test("asked at once, the first named wins when both answer", async () => {
+    const kit = await started({ LAYA_BASE_URL: "https://nas.lan", OPENROUTER_API_KEY: "or-key", JEV_ROUTER_PROVIDER: "laya,openrouter" });
+    kit.setTier("opus", 0.97, 2, 0.9);
+    const t = await turn(kit, "l10");
+    assert.equal(kit.asked().length, 2, "both were asked");
+    assert.match(t.text, /Laya/, "the line names Laya, the first in the list");
   });
 
   test("a named route without its key stops the setup and says which variable", async () => {

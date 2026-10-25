@@ -3,6 +3,8 @@ import type { On } from "claude-code";
 import {
   askJev,
   askJevChain,
+  askJevRace,
+  preferOf,
   timeoutOf,
   type HttpInitLike,
   type HttpResponseLike,
@@ -19,6 +21,7 @@ import {
   effortNamed,
   excludedTiers,
   firstTurnEffort,
+  flagOff,
   isContinuation,
   isEngineNudge,
   notifyContinueOf,
@@ -342,6 +345,10 @@ type Settings = {
   /** Every provider to try, in order; empty when none could be set up (`provider` then says why). */
   providers: readonly ProviderOk[];
   timeoutMs: number;
+  /** Several providers are asked at once (off: one after another, sharing the budget). */
+  parallel: boolean;
+  /** How long a later provider's answer waits for an earlier one still asking. */
+  preferMs: number;
   offered: readonly Tier[];
   excluded: readonly Tier[];
   sticky: number | null;
@@ -542,6 +549,8 @@ async function seedSettings(
     provider: routes.ok ? routes.providers[0]! : routes,
     providers: routes.ok ? routes.providers : [],
     timeoutMs: timeoutOf(await $.env.get("JEV_ROUTER_TIMEOUT_MS")),
+    parallel: !flagOff(await $.env.get("JEV_ROUTER_PARALLEL")),
+    preferMs: preferOf(await $.env.get("JEV_ROUTER_PREFER_MS")),
     offered: tiers.offered,
     excluded: tiers.excluded,
     sticky: stickyOf(await $.env.get("JEV_ROUTER_STICKY"))
@@ -601,10 +610,12 @@ async function classify(
     timeoutMs: settings.timeoutMs,
     signal,
   };
-  // One provider asks as before; several share the budget, one after another.
-  return settings.providers.length > 1
-    ? askJevChain({ ...common, providers: settings.providers })
-    : askJev({ ...common, provider: settings.provider });
+  // One provider asks as before; several are asked at once (the first named
+  // preferred), or one after another sharing the budget with JEV_ROUTER_PARALLEL=0.
+  if (settings.providers.length <= 1) return askJev({ ...common, provider: settings.provider });
+  return settings.parallel
+    ? askJevRace({ ...common, providers: settings.providers, preferMs: settings.preferMs })
+    : askJevChain({ ...common, providers: settings.providers });
 }
 
 /**
@@ -1803,6 +1814,8 @@ export function register(on: On) {
         surface,
         provider: settings.provider,
         providers: settings.providers.map((p) => p.name),
+        parallel: settings.parallel,
+        preferMs: settings.preferMs,
         timeoutMs: settings.timeoutMs,
         sticky: settings.sticky,
         ...(overridden.has("sticky") ? {} : { bars: settings.bars }),

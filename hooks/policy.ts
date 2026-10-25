@@ -257,7 +257,7 @@ type ChoiceAnswer = {
   confidence?: unknown;
   probabilities?: unknown;
 };
-type ScoreAnswer = { type: "score"; score?: unknown; confidence?: unknown };
+type ScoreAnswer = { type: "score"; score?: unknown; confidence?: unknown; probabilities?: unknown };
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;

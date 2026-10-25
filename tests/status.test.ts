@@ -107,6 +107,12 @@ describe("status report", () => {
     assert.match(report, /budget\s+1500ms/);
   });
 
+  test("several deciders say whether they are asked at once or one after another", () => {
+    const two = { ...base, providers: ["vllm", "openrouter"] };
+    assert.match(statusReport({ ...two, parallel: true, preferMs: 300 }), /deciders  vllm, openrouter at once \(the first named wins if it answers within 300ms of another\)/);
+    assert.match(statusReport({ ...two, parallel: false }), /fallback  vllm → openrouter/);
+  });
+
   test("a missing key is stated loudly, not implied", () => {
     assert.match(statusReport({ ...base, provider: noProvider }), /NOT SET UP — no TYPESAFE_API_KEY or AI_GATEWAY_API_KEY/);
   });

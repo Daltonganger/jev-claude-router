@@ -5796,6 +5796,36 @@ describe("register: Laya and a chain of providers (2026-10-21)", () => {
     assert.match(t.text, /Laya/, "the line names Laya, the first in the list");
   });
 
+  /** The ledger's records in the kit's store. */
+  const ledgered = async (kit: Awaited<ReturnType<typeof started>>) => {
+    const store = (kit.$ as unknown as { store: { keys: () => Promise<string[]>; get: (k: string) => Promise<unknown> } }).store;
+    const out: Record<string, unknown>[] = [];
+    for (const k of (await store.keys()).filter((k) => k.startsWith("ledger:"))) out.push(...((await store.get(k)) as Record<string, unknown>[]));
+    return out;
+  };
+
+  test("with a stagger, a first provider that answers is the only one asked, and the ledger says so", async () => {
+    const kit = await started({ LAYA_BASE_URL: "https://nas.lan", OPENROUTER_API_KEY: "or-key", JEV_ROUTER_PROVIDER: "laya,openrouter", JEV_ROUTER_STAGGER_MS: "400" });
+    kit.setTier("opus", 0.97, 2, 0.9);
+    const t = await turn(kit, "l11");
+    assert.deepEqual(kit.asked().map((a) => a.url), ["https://nas.lan/v1/systemone"]);
+    assert.match(t.text, /Laya/);
+    assert.match(await report(kit), /deciders\s+laya, openrouter, each next one asked 400ms after the one before without an answer, or at once when it fails/);
+    const [e] = await ledgered(kit);
+    assert.deepEqual((e?.tries as { name: string; outcome: string }[]).map((x) => [x.name, x.outcome]), [["laya", "won"], ["openrouter", "not asked"]]);
+  });
+
+  test("with a stagger, a failing first provider asks the next at once", async () => {
+    const kit = await started({ LAYA_BASE_URL: "https://nas.lan", OPENROUTER_API_KEY: "or-key", JEV_ROUTER_PROVIDER: "laya,openrouter", JEV_ROUTER_STAGGER_MS: "400" });
+    kit.failHost("nas.lan");
+    kit.setTier("opus", 0.97, 2, 0.9);
+    const t = await turn(kit, "l12");
+    assert.equal(kit.asked().length, 2);
+    assert.match(t.text, /Jev 97%/);
+    const [e] = await ledgered(kit);
+    assert.deepEqual((e?.tries as { name: string; outcome: string }[]).map((x) => [x.name, x.outcome]), [["laya", "failed"], ["openrouter", "won"]]);
+  });
+
   test("a named route without its key stops the setup and says which variable", async () => {
     const kit = await started({ JEV_ROUTER_PROVIDER: "openrouter" });
     assert.match(await report(kit), /provider\s+NOT SET UP — JEV_ROUTER_PROVIDER=openrouter but OPENROUTER_API_KEY is not set/);

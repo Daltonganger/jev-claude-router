@@ -6,10 +6,12 @@ import {
   askJevChain,
   askJevRace,
   DEFAULT_PREFER_MS,
+  DEFAULT_STAGGER_MS,
   DEFAULT_TIMEOUT_MS,
   MAX_TIMEOUT_MS,
   preferOf,
   requestBodyOf,
+  staggerOf,
   timeoutOf,
   type HttpInitLike,
   type HttpResponseLike,
@@ -788,5 +790,140 @@ describe("askJevRace: every provider at once, the first named preferred", () => 
     assert.equal(preferOf("150"), 150);
     assert.equal(preferOf("soon"), DEFAULT_PREFER_MS);
     assert.equal(preferOf("99999"), MAX_TIMEOUT_MS);
+  });
+});
+
+describe("askJevRace: a staggered reserve, and every provider's part (2026-10-25)", () => {
+  const vllm: ProviderOk = { ok: true, name: "vllm", endpoint: "https://decision.vllm-sr.ai/v1/systemone", model: "vllm-sr/d3-turbo", apiKey: "k1" };
+  const openrouter: ProviderOk = { ok: true, name: "openrouter", endpoint: "https://openrouter.ai/api/v1/systemone", model: "typesafe/jev-1.14", apiKey: "k2" };
+  const laya: ProviderOk = { ok: true, name: "laya", endpoint: "https://nas.lan/v1/systemone", model: "laya", apiKey: "" };
+  const answer = answered({ answers: { tier: { type: "choice", choice: "opus" } } });
+  const down: HttpResponseLike = { ok: false, status: 503, text: "" };
+  const base = { state: "refactor the parser", offered: TIERS, timeoutMs: 1500 };
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  function later<T>() {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>((r) => (resolve = r));
+    return { promise, resolve };
+  }
+
+  /** Waits that end only when told, by length; the budget's never ends. Aborted ones reject. */
+  function timers() {
+    const waiting: { ms: number; resolve: () => void }[] = [];
+    return {
+      lengths: () => waiting.map((w) => w.ms),
+      fire: (ms: number) => {
+        for (const w of waiting.filter((w) => w.ms === ms)) w.resolve();
+      },
+      sleep: (ms: number, options?: { signal?: AbortSignal }) => {
+        if (ms === 1500 || options?.signal === undefined) return never();
+        return new Promise<undefined>((res, rej) => {
+          options.signal!.addEventListener("abort", () => rej(new Error("aborted")));
+          waiting.push({ ms, resolve: () => res(undefined) });
+        });
+      },
+    };
+  }
+  const hosts = (urls: string[]) => urls.map((u) => new URL(u).host);
+
+  test("a first provider that answers in time is the only one asked", async () => {
+    const t = timers();
+    const urls: string[] = [];
+    const first = later<HttpResponseLike>();
+    const result = askJevRace({ ...base, staggerMs: 400, sleep: t.sleep, providers: [vllm, openrouter], fetch: async (url: string) => (urls.push(url), first.promise) });
+    await tick();
+    assert.deepEqual(hosts(urls), ["decision.vllm-sr.ai"], "the reserve waits");
+    first.resolve(answer);
+    const r = await result;
+    assert.ok(r.ok);
+    assert.equal(r.via, "vllm");
+    t.fire(400);
+    await tick();
+    assert.deepEqual(hosts(urls), ["decision.vllm-sr.ai"], "and is never asked once an answer is taken");
+    assert.deepEqual(r.tries?.map((x) => [x.name, x.outcome]), [["vllm", "won"], ["openrouter", "not asked"]]);
+  });
+
+  test("past the stagger the reserve is asked too, and its answer taken after the grace", async () => {
+    const t = timers();
+    const urls: string[] = [];
+    const result = askJevRace({
+      ...base,
+      staggerMs: 400,
+      sleep: t.sleep,
+      providers: [vllm, openrouter],
+      fetch: async (url: string) => (urls.push(url), url.includes("vllm") ? never() : answer),
+    });
+    await tick();
+    t.fire(400);
+    await tick();
+    assert.deepEqual(hosts(urls), ["decision.vllm-sr.ai", "openrouter.ai"]);
+    t.fire(DEFAULT_PREFER_MS);
+    const r = await result;
+    assert.ok(r.ok);
+    assert.equal(r.via, "openrouter");
+    assert.deepEqual(r.tries?.map((x) => [x.name, x.outcome]), [["vllm", "pending"], ["openrouter", "won"]]);
+    assert.equal(r.tries?.[0]?.start, 0);
+    assert.equal(r.tries?.[0]?.ms, undefined, "still asking: no time of its own yet");
+  });
+
+  test("a first provider that fails asks the reserve at once, without waiting out the stagger", async () => {
+    const t = timers();
+    const urls: string[] = [];
+    const r = await askJevRace({ ...base, staggerMs: 400, sleep: t.sleep, providers: [vllm, openrouter], fetch: async (url: string) => (urls.push(url), url.includes("vllm") ? down : answer) });
+    assert.ok(r.ok);
+    assert.equal(r.via, "openrouter");
+    assert.deepEqual(r.tries?.map((x) => [x.name, x.outcome]), [["vllm", "failed"], ["openrouter", "won"]]);
+  });
+
+  test("a third provider waits twice the stagger, and is asked when both before it fail", async () => {
+    const t = timers();
+    const urls: string[] = [];
+    const result = askJevRace({
+      ...base,
+      staggerMs: 300,
+      sleep: t.sleep,
+      providers: [vllm, openrouter, laya],
+      fetch: async (url: string) => (urls.push(url), url.includes("nas.lan") ? answer : down),
+    });
+    const r = await result;
+    assert.deepEqual(t.lengths().sort(), [300, 600]);
+    assert.ok(r.ok);
+    assert.equal(r.via, "laya");
+    assert.deepEqual(r.tries?.map((x) => x.outcome), ["failed", "failed", "won"]);
+  });
+
+  test("all at once keeps every part, the loser's answer included", async () => {
+    const t = timers();
+    const first = later<HttpResponseLike>();
+    const result = askJevRace({ ...base, sleep: t.sleep, providers: [vllm, openrouter], fetch: async (url: string) => (url.includes("vllm") ? first.promise : answer) });
+    await tick();
+    first.resolve(answer);
+    const r = await result;
+    assert.ok(r.ok);
+    assert.deepEqual(r.tries?.map((x) => [x.name, x.outcome, x.start]), [["vllm", "won", 0], ["openrouter", "answered", 0]]);
+    assert.ok(r.tries?.every((x) => typeof x.ms === "number"));
+  });
+
+  test("all failing keeps each one's part", async () => {
+    const r = await askJevRace({ ...base, staggerMs: 100, sleep: timers().sleep, providers: [vllm, openrouter], fetch: async () => down });
+    assert.ok(!r.ok);
+    assert.equal(r.reason, "vllm said HTTP 503; openrouter said HTTP 503");
+    assert.deepEqual(r.tries?.map((x) => x.outcome), ["failed", "failed"]);
+  });
+
+  test("the chain keeps each one's part too; one provider has none", async () => {
+    const r = await askJevChain({ ...base, sleep: timers().sleep, providers: [vllm, openrouter], fetch: async (url: string) => (url.includes("vllm") ? down : answer) });
+    assert.ok(r.ok);
+    assert.deepEqual(r.tries?.map((x) => [x.name, x.outcome]), [["vllm", "failed"], ["openrouter", "won"]]);
+    const one = await askJevChain({ ...base, sleep: timers().sleep, providers: [vllm], fetch: async () => answer });
+    assert.equal(one.tries, undefined);
+  });
+
+  test("the stagger from the environment", () => {
+    assert.equal(staggerOf(undefined), DEFAULT_STAGGER_MS);
+    assert.equal(DEFAULT_STAGGER_MS, 0, "all at once unless set");
+    assert.equal(staggerOf("400"), 400);
+    assert.equal(staggerOf("later"), DEFAULT_STAGGER_MS);
+    assert.equal(staggerOf("99999"), MAX_TIMEOUT_MS);
   });
 });

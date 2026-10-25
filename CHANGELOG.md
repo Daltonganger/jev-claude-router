@@ -19,6 +19,12 @@
   asking. A slow first provider no longer spends the others' time and leaves
   the turn unrouted. `JEV_ROUTER_PARALLEL=0` asks them one after another, as
   before. `/jev` says which.
+- **A staggered reserve** (`JEV_ROUTER_STAGGER_MS`, off by default): each later
+  provider is asked only when the ones before it have not answered within
+  that time, or at once when they failed, so a fast first provider costs one
+  request. The ledger keeps each provider's part in a decision (asked or not,
+  when, how it ended), and `/jev stats` shows per provider how often it won,
+  lost, failed or timed out, and its median answer time.
 - **A ledger of routed turns** in the plugin store (30 days, at most 1,500
   turns; the first 200 characters of each prompt and a digest of the whole
   one, what Jev named, what ran, the decision time, tokens and cost), kept

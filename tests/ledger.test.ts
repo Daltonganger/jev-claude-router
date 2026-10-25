@@ -217,6 +217,25 @@ describe("ledger: stats", () => {
     assert.doesNotMatch(statsReport(statsOf(entries), "7 days", { count: 0, reason: "" }), /missing/);
   });
 
+  test("each decision model's part when several were asked", () => {
+    const race = [
+      rec("r1", NOW, { tries: [{ name: "vllm", outcome: "won", start: 0, ms: 400 }, { name: "openrouter", outcome: "not asked" }] }),
+      rec("r2", NOW, { tries: [{ name: "vllm", outcome: "timed out", start: 0, ms: 1500 }, { name: "openrouter", outcome: "won", start: 400, ms: 600 }] }),
+      rec("r3", NOW, { tries: [{ name: "vllm", outcome: "pending", start: 0 }, { name: "openrouter", outcome: "won", start: 400, ms: 500 }] }),
+      rec("r4", NOW, { tries: [{ name: "vllm", outcome: "won", start: 0, ms: 600 }, { name: "openrouter", outcome: "answered", start: 0, ms: 300 }] }),
+    ];
+    const s = statsOf(race);
+    assert.deepEqual(s.race, [
+      ["vllm", { turns: 4, asked: 4, won: 2, lost: 1, failed: 0, timedOut: 1, medianMs: 500 }],
+      ["openrouter", { turns: 4, asked: 3, won: 2, lost: 1, failed: 0, timedOut: 0, medianMs: 500 }],
+    ]);
+    const text = statsReport(s, "7 days");
+    assert.match(text, /race\s+vllm: asked 4 of 4, won 2, lost 1, timed out 1, median 500ms\n\s+openrouter: asked 3 of 4, won 2, lost 1, median 500ms/);
+    assert.doesNotMatch(statsReport(statsOf(entries), "7 days"), /race/);
+    assert.deepEqual(entryOf({ prompt: "p", ms: 1, decision: decision() }, "t", NOW, "s", [{ name: "vllm", outcome: "won", start: 0, ms: 3 }]).tries, [{ name: "vllm", outcome: "won", start: 0, ms: 3 }]);
+    assert.equal(entryOf({ prompt: "p", ms: 1, decision: decision() }, "t", NOW).tries, undefined);
+  });
+
   test("windows", () => {
     assert.deepEqual(windowOf("24h"), { ms: 24 * 3_600_000, name: "24 hours" });
     assert.deepEqual(windowOf("7d"), { ms: 7 * DAY, name: "7 days" });

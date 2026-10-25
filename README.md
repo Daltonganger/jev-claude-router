@@ -434,7 +434,7 @@ is left alone.
 | `/jev tiers off fable` | Drop one or more tiers from the question entirely. |
 | `/jev tiers on fable` | Bring a dropped tier back. |
 | `/jev compact`, `/jev compact on`, `/jev compact off` | Show or toggle compaction by Jev. |
-| `/jev stats`, `/jev stats 24h`, `/jev stats 30d` | How routing went over a window (7 days by default), from the ledger: turns per tier, who decided and how fast, unrouted turns and why, spend against the same tokens on always-sonnet and always-opus, and your verdicts. |
+| `/jev stats`, `/jev stats 24h`, `/jev stats 30d` | How routing went over a window (7 days by default), from the ledger: turns per tier, who decided and how fast, with several providers how often each was asked, won, lost, failed or timed out and its median answer time, unrouted turns and why, spend against the same tokens on always-sonnet and always-opus, and your verdicts. |
 | `/jev right` | Agree with the tier Jev named on this chat's last routed turn (not a subagent's, not another chat's); the reply names the turn. |
 | `/jev wrong opus` | Say this chat's last routed turn should have run on another tier. Verdicts collect into a test set: `npm run bench:ledger`. |
 
@@ -467,6 +467,7 @@ All settings go in the `env` block of `~/.claude/settings.json`.
 | `JEV_ROUTER_TIMEOUT_MS` | `1500` | How long a turn waits for Jev, in milliseconds. At least 100 (anything less is taken for a mistake and the default used), at most 8000. |
 | `JEV_ROUTER_PARALLEL` | on | With several providers in `JEV_ROUTER_PROVIDER`, ask them all at once, each with the whole budget, and take the first in list order that answers. A slow first provider then no longer spends the others' time and leaves the turn unrouted. Each provider asked is billed for its question (about $0.00003). `0` asks them one after another, the next only when one fails at once, sharing one budget, as before. |
 | `JEV_ROUTER_PREFER_MS` | `300` | How long an answer from a later provider waits for an earlier one still asking, before it is taken: the list is a preference, not only a fallback. `0` takes whichever answers first. |
+| `JEV_ROUTER_STAGGER_MS` | `0` | With several providers asked at once: how long each later provider waits for the ones before it to answer before it is asked too (the second after this long, the third after twice). A provider whose predecessors all failed is asked at once, and one not asked yet when an answer is taken is never asked, so a fast first provider costs one request instead of one per provider. All share one budget. `0` asks them all together. Set it from the answer times `/jev stats` shows per provider. |
 | `JEV_ROUTER_LEDGER` | on | Keep a record of each routed turn in the plugin store (30 days, at most 1,500 turns) for `/jev stats` and `/jev right`/`wrong`. `0` keeps none. |
 
 **Laya, and a fallback.** Laya is a Jev-compatible model you run yourself. Its own

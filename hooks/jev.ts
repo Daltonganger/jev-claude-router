@@ -163,8 +163,31 @@ export type HttpResponseLike = {
  * session can say why a turn went unrouted instead of going quiet.
  */
 export type JevResult =
-  | { ok: true; answers: unknown; ms: number; via?: RouteName; model?: string }
-  | { ok: false; reason: string; ms: number };
+  | { ok: true; answers: unknown; ms: number; via?: RouteName; model?: string; tries?: Try[] }
+  | { ok: false; reason: string; ms: number; tries?: Try[] };
+
+/**
+ * One provider's part in a decision asked of several: whether it was asked,
+ * when, and how it ended. Kept for every provider, not only the one taken,
+ * so `/jev stats` can show why a provider keeps being passed over. Asking a
+ * provider bills it whether or not its answer is taken (no request is
+ * stopped once sent: the engine's fetch takes no abort signal).
+ */
+export type Try = {
+  name: RouteName;
+  /** `won`: taken; `answered`: answered, another taken; `pending`: still asking when the decision was made. */
+  outcome: "won" | "answered" | "failed" | "timed out" | "pending" | "not asked";
+  /** When it was asked, ms after the decision started; absent when it was not asked. */
+  start?: number;
+  /** How long it took to answer or fail, ms; absent while pending or not asked. */
+  ms?: number;
+};
+
+/** The outcome of an attempt that ended. */
+function outcomeOf(result: JevResult, won: boolean): Try["outcome"] {
+  if (result.ok) return won ? "won" : "answered";
+  return result.reason.startsWith("timed out") ? "timed out" : "failed";
+}
 
 export type AskArgs = {
   fetch: (url: string, init?: HttpInitLike) => Promise<HttpResponseLike>;
@@ -395,12 +418,17 @@ export async function askJevChain(args: ChainArgs): Promise<JevResult> {
   const started = now();
   const budget = args.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const failures: { name: string; reason: string }[] = [];
-  for (const provider of args.providers) {
+  const tries: Try[] = args.providers.map((p) => ({ name: p.name, outcome: "not asked" }));
+  // Only with several providers is there anything to tell apart.
+  const withTries = (r: JevResult): JevResult => ({ ...r, ms: now() - started, ...(args.providers.length > 1 ? { tries } : {}) });
+  for (const [i, provider] of args.providers.entries()) {
     const left = budget - (now() - started);
     if (left < MIN_TIMEOUT_MS) break;
+    const start = now() - started;
     const result = await askJev({ ...args, provider, timeoutMs: left });
-    if (result.ok) return { ...result, ms: now() - started };
-    if (result.reason === "ceded") return { ...result, ms: now() - started };
+    tries[i] = { name: provider.name, outcome: outcomeOf(result, true), start, ms: Math.round(result.ms) };
+    if (result.ok) return withTries(result);
+    if (result.reason === "ceded") return withTries(result);
     failures.push({ name: provider.name, reason: result.reason });
     if (result.reason.startsWith("timed out")) break;
   }
@@ -411,7 +439,7 @@ export async function askJevChain(args: ChainArgs): Promise<JevResult> {
       : args.providers.length === 1
         ? failures[0]!.reason
         : failures.map((f) => (f.reason.startsWith(f.name) ? f.reason : `${f.name}: ${f.reason}`)).join("; then ");
-  return { ok: false, reason, ms: now() - started };
+  return withTries({ ok: false, reason, ms: 0 });
 }
 
 /**
@@ -430,41 +458,77 @@ export function preferOf(raw: string | undefined): number {
 }
 
 /**
- * Asks every provider at once, each with the whole budget, and answers with
- * the first in list order that answers: a later one that answers sooner waits
- * `preferMs` for an earlier one still asking, then is taken. A provider that
- * times out no longer spends the others' time, as it does in `askJevChain`,
- * so `vllm,openrouter` still routes when vLLM is slow. Every provider is
- * billed for its question either way (about $0.00003 each).
+ * How long each later provider waits for the ones before it to answer before
+ * it is asked too, when the providers are asked "at once". 0 asks them all
+ * together. `JEV_ROUTER_STAGGER_MS` sets it; set it from the answer times
+ * `/jev stats` shows per provider.
  */
-export async function askJevRace(args: ChainArgs & { preferMs?: number }): Promise<JevResult> {
+export const DEFAULT_STAGGER_MS = 0;
+
+/** The stagger from the environment, or the default when it is unusable. */
+export function staggerOf(raw: string | undefined): number {
+  const v = (raw ?? "").trim();
+  if (!PLAIN_DECIMAL.test(v)) return DEFAULT_STAGGER_MS;
+  return Math.min(Number(v), MAX_TIMEOUT_MS);
+}
+
+/**
+ * Asks the providers side by side within one budget, and answers with the
+ * first in list order that answers: a later one that answers sooner waits
+ * `preferMs` for an earlier one still asking, then is taken. A provider that
+ * times out does not spend the others' time, as it does in `askJevChain`,
+ * so `vllm,openrouter` still routes when vLLM is slow.
+ *
+ * With `staggerMs` 0 every provider is asked at once. Above 0, provider n is
+ * asked n × `staggerMs` after the start, or at once when every provider before
+ * it has failed, and not at all once an answer is taken: a fast first provider
+ * then costs one request instead of one per provider. Each asked provider is
+ * billed for its question (about $0.00003 each), taken or not. Every
+ * provider's part comes back in `tries`.
+ */
+export async function askJevRace(args: ChainArgs & { preferMs?: number; staggerMs?: number }): Promise<JevResult> {
   const providers = args.providers;
   if (providers.length <= 1) return askJevChain(args);
   const now = args.now ?? (() => Date.now());
   const started = now();
   const prefer = args.preferMs ?? DEFAULT_PREFER_MS;
+  const stagger = args.staggerMs ?? DEFAULT_STAGGER_MS;
+  const budget = args.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const results: (JevResult | undefined)[] = providers.map(() => undefined);
+  const starts: (number | undefined)[] = providers.map(() => undefined);
 
   return new Promise<JevResult>((resolve) => {
     let done = false;
     let grace: AbortController | null = null;
-    const finish = (result: JevResult) => {
+    // The waits of providers not asked yet, ended when the decision is made.
+    const waits = new AbortController();
+    const triesOf = (won: number): Try[] =>
+      providers.map((p, i): Try => {
+        const r = results[i];
+        const start = starts[i];
+        if (start === undefined) return { name: p.name, outcome: "not asked" };
+        if (r === undefined) return { name: p.name, outcome: "pending", start };
+        return { name: p.name, outcome: outcomeOf(r, i === won), start, ms: Math.round(r.ms) };
+      });
+    const finish = (taken: number, result: JevResult) => {
       if (done) return;
       done = true;
       grace?.abort();
-      resolve({ ...result, ms: now() - started });
+      waits.abort();
+      resolve({ ...result, ms: now() - started, tries: triesOf(taken) });
     };
-    // The answer to take: the first in order that answered, waiting on an
-    // earlier one still asking unless `skipPending`.
-    const pick = (skipPending: boolean): JevResult | null => {
-      for (const r of results) {
+    // The index of the answer to take: the first in order that answered,
+    // waiting on an earlier one still asking (or not asked yet) unless
+    // `skipPending`; -1 for none.
+    const pick = (skipPending: boolean): number => {
+      for (const [i, r] of results.entries()) {
         if (r === undefined) {
           if (skipPending) continue;
-          return null;
+          return -1;
         }
-        if (r.ok || r.reason === "ceded") return r;
+        if (r.ok || r.reason === "ceded") return i;
       }
-      return null;
+      return -1;
     };
     const failure = (): JevResult => {
       const failures = providers.map((p, i) => ({ name: p.name, reason: (results[i] as { reason?: string } | undefined)?.reason ?? "no answer" }));
@@ -474,24 +538,40 @@ export async function askJevRace(args: ChainArgs & { preferMs?: number }): Promi
         ms: 0,
       };
     };
-    const settle = () => {
+    const settle = (): void => {
       if (done) return;
-      if (results.every((r) => r !== undefined)) return finish(pick(true) ?? failure());
+      if (results.every((r) => r !== undefined)) {
+        const i = pick(true);
+        return i >= 0 ? finish(i, results[i]!) : finish(-1, failure());
+      }
       const taken = pick(false);
-      if (taken) return finish(taken);
+      if (taken >= 0) return finish(taken, results[taken]!);
+      // Every provider asked so far has failed: the next is asked now.
+      const next = results.findIndex((r, i) => r === undefined && starts[i] === undefined);
+      if (next > 0 && results.slice(0, next).every((r) => r !== undefined && !r.ok)) return ask(next);
       if (grace === null && results.some((r) => r?.ok)) {
         grace = new AbortController();
         args.sleep(prefer, { signal: grace.signal }).then(
           () => {
             const late = pick(true);
-            if (late) finish(late);
+            if (late >= 0) finish(late, results[late]!);
           },
           () => undefined,
         );
       }
     };
-    providers.forEach((provider, i) => {
-      askJev({ ...args, provider }).then(
+    const ask = (i: number): void => {
+      if (done || starts[i] !== undefined || results[i] !== undefined) return;
+      const start = now() - started;
+      starts[i] = start;
+      const left = budget - start;
+      if (left < MIN_TIMEOUT_MS) {
+        // Too late to ask: it counts as not asked, and as a failure here.
+        starts[i] = undefined;
+        results[i] = { ok: false, reason: "no time left to ask", ms: 0 };
+        return settle();
+      }
+      askJev({ ...args, provider: providers[i]!, timeoutMs: left }).then(
         (r) => {
           results[i] = r;
           settle();
@@ -500,6 +580,13 @@ export async function askJevRace(args: ChainArgs & { preferMs?: number }): Promi
           results[i] = { ok: false, reason: messageOf(error), ms: 0 };
           settle();
         },
+      );
+    };
+    providers.forEach((_, i) => {
+      if (i === 0 || stagger === 0) return ask(i);
+      args.sleep(stagger * i, { signal: waits.signal }).then(
+        () => ask(i),
+        () => undefined,
       );
     });
   });

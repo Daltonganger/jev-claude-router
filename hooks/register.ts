@@ -6,10 +6,12 @@ import {
   askJevRace,
   messageOf,
   preferOf,
+  staggerOf,
   timeoutOf,
   type HttpInitLike,
   type HttpResponseLike,
   type StateSource,
+  type Try,
 } from "./jev.ts";
 import { labelOf, withLabel } from "./label.ts";
 import { assignmentsOf, BUILTIN_WORDINGS, unknownNames, wordingFor } from "./wording.ts";
@@ -405,6 +407,8 @@ type Settings = {
   parallel: boolean;
   /** How long a later provider's answer waits for an earlier one still asking. */
   preferMs: number;
+  /** How long each later provider waits for the ones before it before it is asked too; 0 asks all at once. */
+  staggerMs: number;
   /** A record of each routed turn is kept in the store, for `/jev stats` and verdicts. */
   ledger: boolean;
   /** Wording names assigned that neither the plugin nor the catalog has. */
@@ -622,6 +626,7 @@ async function seedSettings(
     timeoutMs: timeoutOf(await $.env.get("JEV_ROUTER_TIMEOUT_MS")),
     parallel: !flagOff(await $.env.get("JEV_ROUTER_PARALLEL")),
     preferMs: preferOf(await $.env.get("JEV_ROUTER_PREFER_MS")),
+    staggerMs: staggerOf(await $.env.get("JEV_ROUTER_STAGGER_MS")),
     ledger: ledgerOn(await $.env.get("JEV_ROUTER_LEDGER")),
     offered: tiers.offered,
     excluded: tiers.excluded,
@@ -686,7 +691,7 @@ async function classify(
   // preferred), or one after another sharing the budget with JEV_ROUTER_PARALLEL=0.
   if (settings.providers.length <= 1) return askJev({ ...common, provider: settings.provider });
   return settings.parallel
-    ? askJevRace({ ...common, providers: settings.providers, preferMs: settings.preferMs })
+    ? askJevRace({ ...common, providers: settings.providers, preferMs: settings.preferMs, staggerMs: settings.staggerMs })
     : askJevChain({ ...common, providers: settings.providers });
 }
 
@@ -1144,11 +1149,11 @@ export function register(on: On) {
   const ledgerSession = (): string | undefined =>
     snapshotKey?.startsWith(SNAPSHOT_PREFIX) ? snapshotKey.slice(SNAPSHOT_PREFIX.length) : undefined;
   /** The record a decided turn writes, or null when the ledger is off or this copy is not the one acting. */
-  const ledgerNew = (attempt: Attempt, id: string): { key: string; entry: LedgerEntry } | null => {
+  const ledgerNew = (attempt: Attempt, id: string, tries?: readonly Try[]): { key: string; entry: LedgerEntry } | null => {
     if (!settings?.ledger || inert) return null;
     const at = Date.now();
     const session = ledgerSession();
-    const record = { key: ledgerKey(at, session), entry: entryOf(attempt, id, at, session) };
+    const record = { key: ledgerKey(at, session), entry: entryOf(attempt, id, at, session, tries) };
     ledgerOf.set(attempt, record);
     return record;
   };
@@ -1954,6 +1959,7 @@ export function register(on: On) {
         providers: settings.providers.map((p) => p.name),
         parallel: settings.parallel,
         preferMs: settings.preferMs,
+        staggerMs: settings.staggerMs,
         wordings: settings.providers.filter((p) => p.wordingName).map((p) => `${p.model} asked with ${p.wordingName}`),
         unknownWordings: settings.unknownWordings,
         timeoutMs: settings.timeoutMs,
@@ -2045,6 +2051,8 @@ export function register(on: On) {
       continueFrom !== null &&
       offered.includes(continueFrom.tier);
     const askAbort = new AbortController();
+    /** Each decision model's part, when several were asked, for the ledger. */
+    let tries: readonly Try[] | undefined;
     const asking =
       isContinuation(e.text) || nudge || softNotify || forced !== null
         ? null
@@ -2196,11 +2204,11 @@ export function register(on: On) {
               ...(cacheExpired ? { cold: true } : {}),
             }
           : undefined;
+      const asked = asking === null ? { ok: false as const, reason: "you named the tier, so Jev was not asked", ms: 0 } : await asking;
+      tries = asked.tries;
       attempt = attemptOf(
         e.text,
-        asking === null
-          ? { ok: false, reason: "you named the tier, so Jev was not asked", ms: 0 }
-          : await asking,
+        asked,
         offered,
         {
           sticky: settings.sticky,
@@ -2245,7 +2253,7 @@ export function register(on: On) {
     }
     byTurn.set(e.turnId, attempt);
     trimByTurn(e.turnId);
-    const ledgered = ledgerNew(attempt, e.turnId);
+    const ledgered = ledgerNew(attempt, e.turnId, tries);
     if (ledgered) ledgerNote(await writeLedger($, ledgered, ledgerPruneDue()));
 
     // The line goes into the reply's own text, in turn.step below. Render
@@ -2754,18 +2762,19 @@ export function register(on: On) {
     }
 
     const description = typeof e.description === "string" ? e.description : "";
+    // A task's prompt can carry a notification (the model pasting one in):
+    // cut as a typed prompt is, so no result reaches Jev.
+    const asked = await classify(
+      $,
+      hasNotification(e.prompt) ? notificationStateOf(e.prompt) : e.prompt,
+      settings.offered,
+      settings,
+      undefined,
+      "task",
+    );
     const attempt = spawnAttemptOf(
       description,
-      // A task's prompt can carry a notification (the model pasting one in):
-      // cut as a typed prompt is, so no result reaches Jev.
-      await classify(
-        $,
-        hasNotification(e.prompt) ? notificationStateOf(e.prompt) : e.prompt,
-        settings.offered,
-        settings,
-        undefined,
-        "task",
-      ),
+      asked,
       settings.offered,
       { ...(typeof e.subagentType === "string" ? { type: e.subagentType } : {}), label: description },
       settings.ceiling,
@@ -2777,7 +2786,7 @@ export function register(on: On) {
     // Recorded once it started: a spawn another hook denied ran nowhere,
     // and is not an agent of the reply.
     if (started.agentId !== undefined) record(attempt);
-    const spawnLedgered = started.agentId !== undefined ? ledgerNew(attempt, `agent:${started.agentId}`) : null;
+    const spawnLedgered = started.agentId !== undefined ? ledgerNew(attempt, `agent:${started.agentId}`, asked.tries) : null;
     if (spawnLedgered) ledgerNote(await writeLedger($, spawnLedgered, ledgerPruneDue()));
     if (started.agentId !== undefined) {
       // Prefer dropping finished agents over FIFO: blind eviction silently

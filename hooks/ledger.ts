@@ -67,6 +67,18 @@ export type LedgerEntry = {
   tokens?: { in: number; out: number; read: number; write: number };
   /** The person's verdict: the tier the turn should have run on. Set only by `label`, and kept by `put`. */
   label?: Tier;
+  /** With several decision models: each one's part, when it was asked and how it ended (see Try in jev.ts). */
+  tries?: LedgerTry[];
+};
+
+/** One decision model's part in a turn's decision. */
+export type LedgerTry = {
+  name: string;
+  outcome: "won" | "answered" | "failed" | "timed out" | "pending" | "not asked";
+  /** When it was asked, ms after the decision started. */
+  start?: number;
+  /** How long it took to answer or fail, ms. */
+  ms?: number;
 };
 
 export type Store = {
@@ -144,6 +156,7 @@ export function entryOf(
   id: string,
   at: number,
   session?: string,
+  tries?: readonly LedgerTry[],
 ): LedgerEntry {
   const entry: LedgerEntry = { id, at, prompt: attempt.prompt.slice(0, LEDGER_PROMPT), ms: Math.round(attempt.ms) };
   if (attempt.prompt.trim() !== "") entry.digest = promptDigest(attempt.prompt);
@@ -166,6 +179,7 @@ export function entryOf(
   } else if (attempt.skipped !== undefined) {
     entry.skipped = attempt.skipped.slice(0, 120);
   }
+  if (tries?.length) entry.tries = tries.map((t) => ({ ...t }));
   return entry;
 }
 
@@ -318,6 +332,20 @@ export type LedgerStats = {
   tooLow: number;
   tooHigh: number;
   byDecider: [string, { labelled: number; agree: number }][];
+  /** Per decision model, over turns where several were asked: how each fared. */
+  race: [string, RaceRow][];
+};
+
+export type RaceRow = {
+  turns: number;
+  asked: number;
+  won: number;
+  /** Answered after another was taken, or still asking when it was. */
+  lost: number;
+  failed: number;
+  timedOut: number;
+  /** Median time to answer, over the answers it gave. */
+  medianMs: number | null;
 };
 
 /** A failure reason without its numbers, so alike ones group. */
@@ -331,6 +359,7 @@ export function statsOf(entries: readonly LedgerEntry[], ttl: Ttl = "1h"): Ledge
   const reasons = new Map<string, number>();
   const byDecider = new Map<string, { labelled: number; agree: number }>();
   const always: Partial<Record<Tier, number>> = {};
+  const race = new Map<string, Omit<RaceRow, "medianMs"> & { ms: number[] }>();
   let asked = 0, unrouted = 0, held = 0, spent = 0, priced = 0, labelled = 0, agree = 0, tooLow = 0, tooHigh = 0;
   const ms: number[] = [];
   for (const e of entries) {
@@ -360,6 +389,17 @@ export function statsOf(entries: readonly LedgerEntry[], ttl: Ttl = "1h"): Ledge
         priced++;
         for (const [t, c] of costs) always[t] = (always[t] ?? 0) + (c as number);
       }
+    }
+    for (const t of e.tries ?? []) {
+      const row = race.get(t.name) ?? { turns: 0, asked: 0, won: 0, lost: 0, failed: 0, timedOut: 0, ms: [] };
+      row.turns++;
+      if (t.outcome !== "not asked") row.asked++;
+      if (t.outcome === "won") row.won++;
+      else if (t.outcome === "answered" || t.outcome === "pending") row.lost++;
+      else if (t.outcome === "failed") row.failed++;
+      else if (t.outcome === "timed out") row.timedOut++;
+      if ((t.outcome === "won" || t.outcome === "answered") && typeof t.ms === "number") row.ms.push(t.ms);
+      race.set(t.name, row);
     }
     if (e.label && e.jev) {
       labelled++;
@@ -391,6 +431,7 @@ export function statsOf(entries: readonly LedgerEntry[], ttl: Ttl = "1h"): Ledge
     tooLow,
     tooHigh,
     byDecider: [...byDecider].sort((a, b) => b[1].labelled - a[1].labelled),
+    race: [...race].map(([name, { ms: times, ...row }]): [string, RaceRow] => [name, { ...row, medianMs: median(times) }]),
   };
 }
 
@@ -428,6 +469,17 @@ export function statsReport(s: LedgerStats, window: string, failed?: { count: nu
       (s.medianMs !== null ? `, median ${Math.round(s.medianMs)}ms` : "") +
       (s.held ? ` · ${s.held} held on the running tier` : ""),
   );
+  // Why a provider keeps being passed over: each one's part when several were asked.
+  for (const [i, [name, r]] of s.race.entries()) {
+    const parts = [
+      `won ${r.won}`,
+      r.lost ? `lost ${r.lost}` : "",
+      r.failed ? `failed ${r.failed}` : "",
+      r.timedOut ? `timed out ${r.timedOut}` : "",
+      r.medianMs !== null ? `median ${Math.round(r.medianMs)}ms` : "",
+    ].filter(Boolean);
+    lines.push(`  ${i === 0 ? "race    " : "        "}  ${name}: asked ${r.asked} of ${r.turns}, ${parts.join(", ")}`);
+  }
   if (s.unrouted)
     lines.push(`  unrouted  ${s.unrouted} (${pct(s.unrouted, s.turns)})${s.reasons.length ? `: ${s.reasons.map(([r, n]) => `${r} ×${n}`).join("; ")}` : ""}`);
   if (s.priced) {

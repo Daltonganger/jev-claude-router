@@ -110,6 +110,8 @@ describe("status report", () => {
   test("several deciders say whether they are asked at once or one after another", () => {
     const two = { ...base, providers: ["vllm", "openrouter"] };
     assert.match(statusReport({ ...two, parallel: true, preferMs: 300 }), /deciders  vllm, openrouter at once \(the first named wins if it answers within 300ms of another\)/);
+    assert.match(statusReport({ ...two, parallel: true, preferMs: 300, staggerMs: 400 }), /deciders  vllm, openrouter, each next one asked 400ms after the one before without an answer, or at once when it fails/);
+    assert.match(statusReport({ ...two, parallel: true, preferMs: 300, staggerMs: 0 }), /deciders  vllm, openrouter at once/);
     assert.match(statusReport({ ...two, parallel: false }), /fallback  vllm → openrouter/);
   });
 

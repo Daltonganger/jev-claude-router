@@ -502,6 +502,8 @@ export type Status = {
   /** The providers are asked at once (the first named preferred, waiting `preferMs`); absent or false: one after another. */
   parallel?: boolean;
   preferMs?: number;
+  /** With `parallel`: how long each later provider waits for those before it before it is asked; 0 or absent: all at once. */
+  staggerMs?: number;
   timeoutMs: number;
   /** The confidence a switch must clear, or null when stickiness is off. */
   sticky: number | null;
@@ -1207,7 +1209,9 @@ export function statusReport(status: Status): string {
     if (status.providers !== undefined && status.providers.length > 1)
       lines.push(
         status.parallel
-          ? `  deciders  ${status.providers.join(", ")} at once (the first named wins if it answers within ${status.preferMs ?? 0}ms of another)`
+          ? status.staggerMs
+            ? `  deciders  ${status.providers.join(", ")}, each next one asked ${status.staggerMs}ms after the one before without an answer, or at once when it fails (the first named wins if it answers within ${status.preferMs ?? 0}ms of another)`
+            : `  deciders  ${status.providers.join(", ")} at once (the first named wins if it answers within ${status.preferMs ?? 0}ms of another)`
           : `  fallback  ${status.providers.join(" → ")} (the next is asked when one fails at once)`,
       );
   } else {

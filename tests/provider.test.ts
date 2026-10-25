@@ -61,7 +61,7 @@ describe("providerOf", () => {
 
     assert.deepStrictEqual(provider, {
       ok: false,
-      reason: "no TYPESAFE_API_KEY or AI_GATEWAY_API_KEY",
+      reason: "no decision model set up: none of JEV_ROUTER_PROVIDER, VLLM_SR_API_KEY, TYPESAFE_API_KEY, LAYA_BASE_URL or AI_GATEWAY_API_KEY is set",
     });
   });
 
@@ -442,7 +442,7 @@ describe("OpenRouter, Command Code and OpenCode", () => {
   it("is never chosen by its key alone: that key is used for other things", () => {
     for (const key of ["OPENROUTER_API_KEY", "COMMANDCODE_API_KEY", "OPENCODE_API_KEY"] as const) {
       const p = providerOf(env({ [key]: "some-key" }));
-      assert.deepStrictEqual(p, { ok: false, reason: "no TYPESAFE_API_KEY or AI_GATEWAY_API_KEY" });
+      assert.deepStrictEqual(p, { ok: false, reason: "no decision model set up: none of JEV_ROUTER_PROVIDER, VLLM_SR_API_KEY, TYPESAFE_API_KEY, LAYA_BASE_URL or AI_GATEWAY_API_KEY is set" });
     }
   });
 

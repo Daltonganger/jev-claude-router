@@ -349,7 +349,7 @@ export function providersOf(raw: ProviderEnv): { ok: true; providers: ProviderOk
     else if (env.TYPESAFE_API_KEY) wanted.push("typesafe");
     else if ((env.LAYA_BASE_URL ?? "").trim()) wanted.push("laya");
     else if (env.AI_GATEWAY_API_KEY) wanted.push("gateway");
-    else return { ok: false, reason: "no TYPESAFE_API_KEY or AI_GATEWAY_API_KEY" };
+    else return { ok: false, reason: "no decision model set up: none of JEV_ROUTER_PROVIDER, VLLM_SR_API_KEY, TYPESAFE_API_KEY, LAYA_BASE_URL or AI_GATEWAY_API_KEY is set" };
   }
   const providers: ProviderOk[] = [];
   for (const name of wanted) {

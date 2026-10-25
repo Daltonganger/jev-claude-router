@@ -47,7 +47,7 @@ const typeafeProvider: ProviderResult = {
 
 const noKeyProvider: ProviderResult = {
   ok: false,
-  reason: "no TYPESAFE_API_KEY or AI_GATEWAY_API_KEY",
+  reason: "no decision model set up: none of JEV_ROUTER_PROVIDER, VLLM_SR_API_KEY, TYPESAFE_API_KEY, LAYA_BASE_URL or AI_GATEWAY_API_KEY is set",
 };
 
 const base = {
@@ -120,7 +120,7 @@ describe("jev", () => {
     assert.equal(called, false);
     assert.match(
       got.ok === false ? got.reason : "",
-      /no TYPESAFE_API_KEY or AI_GATEWAY_API_KEY/,
+      /no decision model set up: none of JEV_ROUTER_PROVIDER, VLLM_SR_API_KEY, TYPESAFE_API_KEY, LAYA_BASE_URL or AI_GATEWAY_API_KEY is set/,
     );
   });
 

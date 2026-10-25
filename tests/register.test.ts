@@ -318,7 +318,7 @@ describe("register: the route in the reply", () => {
     );
     assert.equal(
       chunks.find((c) => c.kind === "text")!.text,
-      "> ⚠️ not routed: no TYPESAFE_API_KEY or AI_GATEWAY_API_KEY\n\n---\n\nreply",
+      "> ⚠️ not routed: no decision model set up: none of JEV_ROUTER_PROVIDER, VLLM_SR_API_KEY, TYPESAFE_API_KEY, LAYA_BASE_URL or AI_GATEWAY_API_KEY is set\n\n---\n\nreply",
     );
   });
 

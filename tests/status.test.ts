@@ -67,7 +67,7 @@ const goodProvider: ProviderResult = {
 
 const noProvider: ProviderResult = {
   ok: false,
-  reason: "no TYPESAFE_API_KEY or AI_GATEWAY_API_KEY",
+  reason: "no decision model set up: none of JEV_ROUTER_PROVIDER, VLLM_SR_API_KEY, TYPESAFE_API_KEY, LAYA_BASE_URL or AI_GATEWAY_API_KEY is set",
 };
 
 const base: Status = {
@@ -116,7 +116,7 @@ describe("status report", () => {
   });
 
   test("a missing key is stated loudly, not implied", () => {
-    assert.match(statusReport({ ...base, provider: noProvider }), /NOT SET UP — no TYPESAFE_API_KEY or AI_GATEWAY_API_KEY/);
+    assert.match(statusReport({ ...base, provider: noProvider }), /NOT SET UP — no decision model set up: none of JEV_ROUTER_PROVIDER, VLLM_SR_API_KEY, TYPESAFE_API_KEY, LAYA_BASE_URL or AI_GATEWAY_API_KEY is set/);
   });
 
   test("routing off says how to turn it back on", () => {

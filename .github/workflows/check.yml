@@ -1,0 +1,27 @@
+# The same checks a contributor runs locally (npm run check): the typecheck
+# against the pinned Claude Code types, the tests, and the plugin validation,
+# which also enforces the hooks loader's rules the tests do not.
+name: check
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run types
+      - run: npm run typecheck
+      - run: npm test
+      - name: Validate the plugin
+        run: npx --yes @anthropic-ai/claude-code@2.1.310 plugin validate .

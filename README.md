@@ -628,6 +628,9 @@ npm run setup    # once per clone: fetch Claude Code's type definitions into
 npm run check    # typecheck, tests, plugin validate
 ```
 
+GitHub Actions runs the same checks on every push and pull request
+(`.github/workflows/check.yml`).
+
 Always run `claude plugin validate`. It checks the engine's load-time rules
 without executing anything. The rule that matters most: `$` may only be
 passed to functions declared at the top level of the module. Breaking it

@@ -52,6 +52,11 @@
   `--models`, key `VLLM_SR_API_KEY`), read for its probabilities as the router
   reads it, so d3-turbo can be measured on the same labelled sets as the others.
 
+### Chores
+
+- GitHub Actions runs the typecheck, the tests and `claude plugin validate`
+  on every push and pull request.
+
 ### Fixes
 
 - `npm run typecheck` passes again: a score answer's `probabilities` was read

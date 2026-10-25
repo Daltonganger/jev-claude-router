@@ -4,11 +4,17 @@
  * the person's own verdicts (`/jev right`, `/jev wrong opus`) collect into a
  * labelled set from real sessions for `npm run bench:ledger`.
  *
- * Records sit in one store key per day (`ledger:2026-10-25`), so a turn writes
- * only today's. The store holds at most 4 MiB for everything the plugin keeps,
- * session snapshots included, so the ledger is bounded: LEDGER_DAYS days and
+ * Records sit in one store key per day and session
+ * (`ledger:2026-10-25:<session>`). The store has no transaction: a key is read,
+ * changed and written back. With a key of its own, a session never writes over
+ * another session's records, and its own writes (the main loop and its
+ * subagents finishing together) are made one after another here (`serial`).
+ *
+ * The store holds at most 4 MiB for everything the plugin keeps, session
+ * snapshots included, so the ledger is bounded: LEDGER_DAYS days and
  * LEDGER_MAX records in all, the prompt cut at LEDGER_PROMPT characters (the
- * export finds the whole prompt again in the session's transcript).
+ * export finds the whole prompt again in the session's transcript by its
+ * digest).
  *
  * Nothing here touches the engine: the store is passed in, so this runs under
  * plain `node` in tests.
@@ -25,13 +31,15 @@ export const LEDGER_PER_DAY = 400;
 export const LEDGER_PROMPT = 200;
 
 export type LedgerEntry = {
-  /** The turn's id; a step's usage finds its record by it. */
+  /** The turn's id (`agent:<id>` for a subagent's); a step's usage finds its record by it. */
   id: string;
-  /** The session, so the export can find the whole prompt in its transcript. */
+  /** The session, so a verdict lands on this session's turn and the export finds the whole prompt in its transcript. */
   session?: string;
   /** When the turn started, ms since the epoch. */
   at: number;
   prompt: string;
+  /** `promptDigest` of the whole prompt, which `prompt` holds only the start of. */
+  digest?: string;
   /** What started the turn, when not a typed prompt (see Attempt.kind). */
   kind?: "notify" | "agent" | "continue" | "nudge";
   /** The tier the decision model named, when one was asked this turn. */
@@ -57,20 +65,67 @@ export type LedgerEntry = {
   /** Dollars at list price, and the tokens, summed over the turn's steps. */
   cost?: number;
   tokens?: { in: number; out: number; read: number; write: number };
-  /** The person's verdict: the tier the turn should have run on. */
+  /** The person's verdict: the tier the turn should have run on. Set only by `label`, and kept by `put`. */
   label?: Tier;
 };
 
 export type Store = {
   get: (key: string) => Promise<unknown>;
   set: (key: string, value: unknown) => Promise<unknown>;
-  delete?: (key: string) => Promise<unknown>;
-  keys?: () => Promise<string[]>;
+  delete: (key: string) => Promise<unknown>;
+  keys: () => Promise<string[]>;
 };
 
-/** `ledger:YYYY-MM-DD` for a time, in UTC so a day is the same day on every machine. */
-export function dayKey(at: number): string {
-  return `${LEDGER_PREFIX}${new Date(at).toISOString().slice(0, 10)}`;
+/** `YYYY-MM-DD` for a time, in UTC so a day is the same day on every machine. */
+function dayOf(at: number): string {
+  return new Date(at).toISOString().slice(0, 10);
+}
+
+/** The session's key for a day: `ledger:YYYY-MM-DD:<session>`. */
+export function ledgerKey(at: number, session: string | undefined): string {
+  return `${LEDGER_PREFIX}${dayOf(at)}:${session || "-"}`;
+}
+
+/** The day of a ledger key, or null for a key that is not one. */
+function dayOfKey(key: string): string | null {
+  const day = key.slice(LEDGER_PREFIX.length, LEDGER_PREFIX.length + 10);
+  return key.startsWith(LEDGER_PREFIX) && /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : null;
+}
+
+/**
+ * A digest of a whole prompt, whitespace folded, so the export can tell apart
+ * prompts that share their first LEDGER_PROMPT characters (a project's
+ * template with different requests after it). cyrb53: no crypto module in a
+ * hook, and this needs telling apart, not secrecy.
+ */
+export function promptDigest(text: string): string {
+  const s = text.replace(/\s+/g, " ").trim();
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 2654435761);
+    h2 = Math.imul(h2 ^ c, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16).padStart(14, "0");
+}
+
+/**
+ * Runs `work` for a key after the work already queued for it, so two writes
+ * from this process never read the same list and lose one another's change.
+ * Another process writes other keys (another session's).
+ */
+const queues = new Map<string, Promise<unknown>>();
+function serial<T>(key: string, work: () => Promise<T>): Promise<T> {
+  const before = queues.get(key) ?? Promise.resolve();
+  const run = before.then(work, work);
+  const tail = run.catch(() => undefined);
+  queues.set(key, tail);
+  void tail.then(() => {
+    if (queues.get(key) === tail) queues.delete(key);
+  });
+  return run;
 }
 
 /** The ledger flag: on unless `0`, `false`, `off` or `no`. */
@@ -91,6 +146,7 @@ export function entryOf(
   session?: string,
 ): LedgerEntry {
   const entry: LedgerEntry = { id, at, prompt: attempt.prompt.slice(0, LEDGER_PROMPT), ms: Math.round(attempt.ms) };
+  if (attempt.prompt.trim() !== "") entry.digest = promptDigest(attempt.prompt);
   if (session) entry.session = session;
   if (attempt.kind) entry.kind = attempt.kind;
   if (attempt.continued) entry.continued = true;
@@ -137,90 +193,97 @@ function listOf(raw: unknown): LedgerEntry[] {
     : [];
 }
 
-/** Writes `entry` into its day, replacing the record with its id. */
-export async function put(store: Store, entry: LedgerEntry, key: string = dayKey(entry.at)): Promise<void> {
-  const list = listOf(await store.get(key));
-  const at = list.findIndex((e) => e.id === entry.id);
-  if (at >= 0) list[at] = entry;
-  else list.push(entry);
-  await store.set(key, list.slice(-LEDGER_PER_DAY));
-}
-
-/** Updates the record `id` in its day (or yesterday's, for a turn that crossed midnight). False when none was found. */
-export async function update(store: Store, id: string, now: number, change: (e: LedgerEntry) => LedgerEntry): Promise<boolean> {
-  for (const key of [dayKey(now), dayKey(now - 86_400_000)]) {
+/**
+ * Writes `entry` under `key` (its session's day), replacing the record with
+ * its id. A verdict already given is kept: the record a turn rewrites with its
+ * usage is the one it holds in memory, which never has the label `/jev wrong`
+ * put in the store meanwhile.
+ */
+export function put(store: Store, entry: LedgerEntry, key: string): Promise<void> {
+  return serial(key, async () => {
     const list = listOf(await store.get(key));
-    const at = list.findIndex((e) => e.id === id);
-    if (at < 0) continue;
-    list[at] = change(list[at]!);
-    await store.set(key, list);
-    return true;
-  }
-  return false;
+    const at = list.findIndex((e) => e.id === entry.id);
+    if (at >= 0) {
+      const label = entry.label ?? list[at]!.label;
+      list[at] = label === undefined ? entry : { ...entry, label };
+    } else list.push(entry);
+    await store.set(key, list.slice(-LEDGER_PER_DAY));
+  });
 }
 
-/** The ledger's day keys, oldest first. */
-async function dayKeys(store: Store, now: number): Promise<string[]> {
-  if (store.keys) return (await store.keys()).filter((k) => k.startsWith(LEDGER_PREFIX)).sort();
-  // Without a key list: the days the ledger can hold.
-  const keys: string[] = [];
-  for (let d = LEDGER_DAYS - 1; d >= 0; d--) keys.push(dayKey(now - d * 86_400_000));
-  return keys;
+/** The ledger's keys, oldest day first. */
+async function ledgerKeys(store: Store): Promise<string[]> {
+  return (await store.keys()).filter((k) => dayOfKey(k) !== null).sort();
 }
 
 /** Every record since `since` (ms), oldest first. */
-export async function readSince(store: Store, since: number, now: number): Promise<LedgerEntry[]> {
-  const first = dayKey(since);
+export async function readSince(store: Store, since: number): Promise<LedgerEntry[]> {
+  const first = dayOf(since);
   const out: LedgerEntry[] = [];
-  for (const key of await dayKeys(store, now)) {
-    if (key < first) continue;
+  for (const key of await ledgerKeys(store)) {
+    if (dayOfKey(key)! < first) continue;
     for (const e of listOf(await store.get(key))) if (e.at >= since) out.push(e);
   }
   return out.sort((a, b) => a.at - b.at);
 }
 
+/** A turn of the main loop, not a subagent's: the one a verdict is about. */
+function mainTurn(e: LedgerEntry): boolean {
+  return e.kind !== "agent" && !e.id.startsWith("agent:");
+}
+
 /**
- * Labels the latest turn the decision model was asked about. `tier` is the
- * person's verdict; `"right"` agrees with the tier it named. Null when no such
- * turn is in the last two days.
+ * Labels the latest turn of this session's main loop that the decision model
+ * was asked about. `tier` is the person's verdict; `"right"` agrees with the
+ * tier it named. Another session's turns and subagents' are never labelled.
+ * Null when there is no such turn in the last two days.
  */
-export async function label(store: Store, verdict: Tier | "right", now: number): Promise<LedgerEntry | null> {
-  for (const key of [dayKey(now), dayKey(now - 86_400_000)]) {
-    const list = listOf(await store.get(key));
-    for (let i = list.length - 1; i >= 0; i--) {
-      const e = list[i]!;
-      if (e.jev === undefined) continue;
-      const tier = verdict === "right" ? e.jev : verdict;
-      list[i] = { ...e, label: tier };
-      await store.set(key, list);
-      return list[i]!;
-    }
+export async function label(store: Store, verdict: Tier | "right", now: number, session: string | undefined): Promise<LedgerEntry | null> {
+  for (const key of [ledgerKey(now, session), ledgerKey(now - 86_400_000, session)]) {
+    const found = await serial(key, async () => {
+      const list = listOf(await store.get(key));
+      for (let i = list.length - 1; i >= 0; i--) {
+        const e = list[i]!;
+        if (e.jev === undefined || !mainTurn(e)) continue;
+        list[i] = { ...e, label: verdict === "right" ? e.jev : verdict };
+        await store.set(key, list);
+        return list[i]!;
+      }
+      return null;
+    });
+    if (found) return found;
   }
   return null;
 }
 
-/** Drops days past LEDGER_DAYS, then the oldest days until at most LEDGER_MAX records remain. Returns how many days went. */
+/**
+ * Drops days past LEDGER_DAYS, then the oldest days until at most LEDGER_MAX
+ * records remain (today is never dropped for the cap). Returns how many keys
+ * went. Run at the start of a session and then hourly while it writes.
+ */
 export async function prune(store: Store, now: number): Promise<number> {
-  if (!store.delete) return 0;
-  const cutoff = dayKey(now - LEDGER_DAYS * 86_400_000);
-  const keys = await dayKeys(store, now);
+  const cutoff = dayOf(now - LEDGER_DAYS * 86_400_000);
+  const today = dayOf(now);
   let dropped = 0;
-  const counts: [string, number][] = [];
-  for (const key of keys) {
-    if (key < cutoff) {
+  const days = new Map<string, { keys: string[]; count: number }>();
+  for (const key of await ledgerKeys(store)) {
+    const day = dayOfKey(key)!;
+    if (day < cutoff) {
       await store.delete(key);
       dropped++;
       continue;
     }
-    counts.push([key, listOf(await store.get(key)).length]);
+    const row = days.get(day) ?? { keys: [], count: 0 };
+    row.keys.push(key);
+    row.count += listOf(await store.get(key)).length;
+    days.set(day, row);
   }
-  let total = counts.reduce((n, [, c]) => n + c, 0);
-  // Today is never dropped for the cap.
-  while (total > LEDGER_MAX && counts.length > 1) {
-    const [key, c] = counts.shift()!;
-    await store.delete(key);
-    total -= c;
-    dropped++;
+  let total = [...days.values()].reduce((n, d) => n + d.count, 0);
+  for (const [day, row] of days) {
+    if (total <= LEDGER_MAX || day === today) break;
+    for (const key of row.keys) await store.delete(key);
+    total -= row.count;
+    dropped += row.keys.length;
   }
   return dropped;
 }
@@ -346,12 +409,18 @@ const pct = (n: number, of: number) => (of === 0 ? "—" : `${Math.round((100 * 
 const money = (n: number) => (n >= 10 ? `$${n.toFixed(0)}` : n >= 1 ? `$${n.toFixed(2)}` : `$${n.toFixed(3)}`);
 
 /** The reply to `/jev stats`. */
-export function statsReport(s: LedgerStats, window: string): string {
+export function statsReport(s: LedgerStats, window: string, failed?: { count: number; reason: string }): string {
   const lines = ["", `  Last ${window}:`];
+  // Turns the store would not take are missing from every figure below.
+  const missing = failed && failed.count > 0
+    ? `  missing   ${failed.count} ledger write${failed.count === 1 ? "" : "s"} failed in this session (${failed.reason}): those turns are not counted`
+    : null;
   if (s.turns === 0) {
     lines.push("  No routed turns in this window yet.");
+    if (missing) lines.push(missing);
     return lines.join("\n");
   }
+  if (missing) lines.push(missing);
   const ran = TIERS.filter((t) => s.ran[t]).map((t) => `${t} ${s.ran[t]} (${pct(s.ran[t]!, s.turns)})`).join(" · ");
   lines.push(`  turns     ${s.turns}${ran ? ` — ${ran}` : ""}`);
   lines.push(
@@ -379,12 +448,20 @@ export function statsReport(s: LedgerStats, window: string): string {
   return lines.join("\n");
 }
 
-/** The reply to `/jev right` and `/jev wrong <tier>`. */
-export function labelReply(entry: LedgerEntry | null, verdict: Tier | "right"): string {
-  if (entry === null) return "No routed turn in the last two days to label: the ledger keeps turns Jev was asked about.";
+function ago(ms: number): string {
+  if (ms < 60_000) return "just now";
+  if (ms < 3_600_000) return `${Math.floor(ms / 60_000)} min ago`;
+  return `${Math.floor(ms / 3_600_000)} h ago`;
+}
+
+/** The reply to `/jev right` and `/jev wrong <tier>`: which turn was labelled, so a verdict on the wrong one is seen. */
+export function labelReply(entry: LedgerEntry | null, verdict: Tier | "right", now: number): string {
+  if (entry === null)
+    return "No routed turn of this session in the last two days to label: a verdict goes on a turn of this chat that Jev was asked about.";
   const said = `${entry.decider ?? "Jev"} said ${entry.jev}`;
   const prompt = entry.prompt.length > 60 ? `${entry.prompt.slice(0, 59)}…` : entry.prompt;
+  const which = `"${prompt}" (this chat's last decided turn, ${ago(now - entry.at)})`;
   return verdict === "right"
-    ? `Labelled "${prompt}" ${entry.label}: ${said}, and you agree. npm run bench:ledger turns verdicts into a test set.`
-    : `Labelled "${prompt}" ${entry.label}: ${said}. npm run bench:ledger turns verdicts into a test set.`;
+    ? `Labelled ${which} ${entry.label}: ${said}, and you agree. npm run bench:ledger turns verdicts into a test set.`
+    : `Labelled ${which} ${entry.label}: ${said}. npm run bench:ledger turns verdicts into a test set.`;
 }

@@ -4,6 +4,7 @@ import { setEffortSupport, setLadderModels } from "../hooks/policy.ts";
 import { afterEach, describe, test } from "node:test";
 
 import { CATALOG_WAIT_MS, register } from "../hooks/register.ts";
+import { ledgerKey } from "../hooks/ledger.ts";
 
 // These suites exercise the window guard (a turn too long for a tier is moved
 // up, or held where it is), which needs a tier with a smaller window than the
@@ -5974,11 +5975,64 @@ describe("register: the ledger, verdicts and /jev stats (2026-10-25)", () => {
     const kit = await started();
     kit.setTier("opus", 0.95, 2);
     await turn(kit, "g2", "rename foo to bar");
-    assert.match(await jev(kit, "wrong haiku"), /Labelled "rename foo to bar" haiku: Jev said opus\./);
+    assert.match(await jev(kit, "wrong haiku"), /Labelled "rename foo to bar" \(this chat's last decided turn, just now\) haiku: Jev said opus\./);
     assert.equal((await ledger(kit))[0]?.label, "haiku");
     assert.match(await jev(kit, "right"), /and you agree/);
     assert.equal((await ledger(kit))[0]?.label, "opus");
     assert.match(await jev(kit, "wrong medium"), /Say which tier it should have run on/);
+  });
+
+  test("a verdict in one chat never labels another chat's turn on the same store", async () => {
+    // Before: the verdict went on the store's last decided turn, whoever's.
+    const store = new Map<string, unknown>();
+    const a = load({ AI_GATEWAY_API_KEY: "gw-key", JEV_ROUTER_STICKY: "1" }, { store, id: "sess-A" });
+    await a.hooks.get("session.start")!(a.$, {}, async (e: unknown) => e);
+    a.setTier("opus", 0.95, 2);
+    await turn(a as Kit, "a1", "my request in chat A");
+    // Chat B is another Claude Code process on the same plugin store: its
+    // turn, decided after A's, lands as that process writes it.
+    const later = Date.now() + 1000;
+    store.set(ledgerKey(later, "sess-B"), [{ id: "b1", session: "sess-B", at: later, prompt: "Unrelated request in chat B", ms: 300, jev: "haiku", tier: "haiku", decider: "Jev" }]);
+    assert.match(await jev(a as Kit, "wrong haiku"), /Labelled "my request in chat A"/);
+    const all = await ledger(a as Kit);
+    assert.equal(all.find((e) => e.id === "a1")?.label, "haiku");
+    assert.equal(all.find((e) => e.id === "b1")?.label, undefined);
+  });
+
+  test("a verdict given while the reply streams survives the turn's usage", async () => {
+    // Before: the stop chunk wrote the turn's record from memory, without the label.
+    const kit = await started();
+    kit.setTier("opus", 0.95, 2);
+    await kit.hooks.get("turn.start")!(kit.$, { text: "fix the flaky test", turnId: "s1" }, async (e: unknown) => e);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    async function* paused() {
+      yield { kind: "text", index: 0, text: "reply", ref: 1 };
+      await gate;
+      yield { kind: "stop", stopReason: "end_turn", usage: usage("claude-opus-5-5"), ref: 2 };
+      return { stopReason: "end_turn" };
+    }
+    const stream = collect(kit.hooks.get("turn.step")!(kit.$, { turnId: "s1", index: 0 }, paused));
+    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+    assert.match(await jev(kit, "wrong sonnet"), /Labelled "fix the flaky test"/);
+    release();
+    await stream;
+    const [e] = await ledger(kit);
+    assert.equal(e?.label, "sonnet");
+    assert.deepEqual(e?.tokens, { in: 1000, out: 3000, read: 9000, write: 0 });
+  });
+
+  test("/jev stats says how many ledger writes the store refused", async () => {
+    const kit = await started();
+    kit.setTier("opus", 0.95, 2);
+    const store = (kit.$ as unknown as { store: { set: (k: string, v: unknown) => Promise<void> } }).store;
+    const set = store.set;
+    store.set = async (k, v) => {
+      if (k.startsWith("ledger:")) throw new Error("store over 4 MiB");
+      return set(k, v);
+    };
+    await turn(kit, "f1");
+    assert.match(await jev(kit, "stats"), /missing\s+2 ledger writes failed in this session \(store over 4 MiB\)/);
   });
 
   test("/jev stats counts the window, verdicts included", async () => {

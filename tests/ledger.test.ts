@@ -4,17 +4,18 @@ import { describe, test } from "node:test";
 import {
   LEDGER_MAX,
   LEDGER_PER_DAY,
-  dayKey,
+  LEDGER_PROMPT,
   entryOf,
   label,
   labelReply,
+  ledgerKey,
   ledgerOn,
+  promptDigest,
   prune,
   put,
   readSince,
   statsOf,
   statsReport,
-  update,
   windowOf,
   withUsage,
   type LedgerEntry,
@@ -43,7 +44,7 @@ describe("ledger: records", () => {
     const e = entryOf({ prompt: "x".repeat(500), ms: 412.6, decision: decision({ decider: "d3-turbo" }) }, "t1", NOW, "sess-1");
     assert.equal(e.prompt.length, 200);
     assert.deepEqual({ ...e, prompt: undefined }, {
-      id: "t1", at: NOW, session: "sess-1", prompt: undefined, ms: 413,
+      id: "t1", at: NOW, session: "sess-1", prompt: undefined, digest: promptDigest("x".repeat(500)), ms: 413,
       tier: "opus", model: "claude-opus-5-5", effort: "high", jev: "opus", confidence: 0.82, decider: "d3-turbo",
     });
   });
@@ -76,53 +77,104 @@ describe("ledger: records", () => {
   });
 });
 
+/** A store whose reads and writes take a turn of the event loop each, as the engine's do, so writes can interleave. */
+function slow() {
+  const s = memory();
+  const tick = () => new Promise((r) => setImmediate(r));
+  return { ...s, get: async (k: string) => (await tick(), s.get(k)), set: async (k: string, v: unknown) => (await tick(), s.set(k, v)) };
+}
+
 describe("ledger: the store", () => {
-  test("one key per UTC day, a record replaced by its id, a day capped", async () => {
+  const A = "sess-a";
+  const B = "sess-b";
+  const putIn = (s: ReturnType<typeof memory>, session: string | undefined, e: LedgerEntry) => put(s, { ...e, ...(session ? { session } : {}) }, ledgerKey(e.at, session));
+
+  test("one key per UTC day and session, a record replaced by its id, a key capped", async () => {
     const s = memory();
-    await put(s, rec("a", NOW));
-    await put(s, rec("a", NOW, { cost: 1 }));
-    await put(s, rec("b", NOW - DAY));
-    assert.deepEqual([...s.m.keys()].sort(), ["ledger:2026-10-24", "ledger:2026-10-25"]);
-    assert.equal((s.m.get(dayKey(NOW)) as LedgerEntry[])[0]!.cost, 1);
-    for (let i = 0; i < LEDGER_PER_DAY + 5; i++) await put(s, rec(`x${i}`, NOW));
-    assert.equal((s.m.get(dayKey(NOW)) as LedgerEntry[]).length, LEDGER_PER_DAY);
+    await putIn(s, A, rec("a", NOW));
+    await putIn(s, A, rec("a", NOW, { cost: 1 }));
+    await putIn(s, A, rec("b", NOW - DAY));
+    await putIn(s, B, rec("c", NOW));
+    await putIn(s, undefined, rec("d", NOW));
+    assert.deepEqual([...s.m.keys()].sort(), ["ledger:2026-10-24:sess-a", "ledger:2026-10-25:-", "ledger:2026-10-25:sess-a", "ledger:2026-10-25:sess-b"]);
+    assert.equal((s.m.get(ledgerKey(NOW, A)) as LedgerEntry[])[0]!.cost, 1);
+    for (let i = 0; i < LEDGER_PER_DAY + 5; i++) await putIn(s, A, rec(`x${i}`, NOW));
+    assert.equal((s.m.get(ledgerKey(NOW, A)) as LedgerEntry[]).length, LEDGER_PER_DAY);
   });
 
-  test("an update finds a turn that crossed midnight", async () => {
-    const s = memory();
-    await put(s, rec("late", NOW - DAY));
-    assert.equal(await update(s, "late", NOW, (e) => ({ ...e, cost: 2 })), true);
-    assert.equal((await readSince(s, NOW - 2 * DAY, NOW))[0]!.cost, 2);
-    assert.equal(await update(s, "nowhere", NOW, (e) => e), false);
+  test("writes at the same moment keep every record: one session's turns, and two sessions'", async () => {
+    // Before: one key per day, read, changed and written back; two at once left one.
+    const s = slow();
+    await Promise.all([putIn(s, A, rec("main", NOW)), putIn(s, A, rec("agent:1", NOW, { kind: "agent" })), putIn(s, A, rec("agent:2", NOW, { kind: "agent" }))]);
+    await Promise.all([putIn(s, A, rec("main", NOW, { cost: 1 })), putIn(s, B, rec("other", NOW)), putIn(s, A, rec("agent:1", NOW, { kind: "agent", cost: 2 }))]);
+    const all = await readSince(s, NOW - DAY);
+    assert.deepEqual(all.map((e) => e.id).sort(), ["agent:1", "agent:2", "main", "other"]);
+    assert.equal(all.find((e) => e.id === "main")?.cost, 1);
+    assert.equal(all.find((e) => e.id === "agent:1")?.cost, 2);
   });
 
-  test("read since a time, oldest first", async () => {
+  test("a turn's usage, written after a verdict, keeps the verdict", async () => {
     const s = memory();
-    await put(s, rec("old", NOW - 10 * DAY));
-    await put(s, rec("b", NOW - 1000));
-    await put(s, rec("a", NOW - 2 * DAY));
-    assert.deepEqual((await readSince(s, NOW - 7 * DAY, NOW)).map((e) => e.id), ["a", "b"]);
+    const first = rec("t", NOW);
+    await putIn(s, A, first);
+    await label(s, "sonnet", NOW, A);
+    // The record the turn holds in memory has no label; its usage goes on it.
+    await putIn(s, A, withUsage(first, { model: "claude-opus-5-5", input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 3, cache_creation_input_tokens: 4 }, 0.5));
+    const [e] = await readSince(s, NOW - DAY);
+    assert.equal(e?.label, "sonnet");
+    assert.equal(e?.cost, 0.5);
+    // A verdict given after the usage stays too, and a later verdict replaces it.
+    assert.equal((await label(s, "right", NOW, A))?.label, "opus");
+    assert.equal((await readSince(s, NOW - DAY))[0]?.label, "opus");
   });
 
-  test("labels go on the latest turn Jev was asked about", async () => {
+  test("read since a time, oldest first, across sessions", async () => {
     const s = memory();
-    await put(s, rec("asked", NOW - 2000));
-    await put(s, rec("unrouted", NOW - 1000, { jev: undefined, skipped: "timed out" }));
-    const right = await label(s, "right", NOW);
+    await putIn(s, A, rec("old", NOW - 10 * DAY));
+    await putIn(s, B, rec("b", NOW - 1000));
+    await putIn(s, A, rec("a", NOW - 2 * DAY));
+    assert.deepEqual((await readSince(s, NOW - 7 * DAY)).map((e) => e.id), ["a", "b"]);
+  });
+
+  test("a verdict goes on this session's latest main turn Jev was asked about", async () => {
+    const s = memory();
+    await putIn(s, A, rec("asked", NOW - 3000, { prompt: "my request in chat A" }));
+    await putIn(s, A, rec("unrouted", NOW - 2500, { jev: undefined, skipped: "timed out" }));
+    // A subagent of A decided later, and chat B after that: neither is A's turn.
+    await putIn(s, A, rec("agent:x", NOW - 2000, { kind: "agent", prompt: "subagent task" }));
+    await putIn(s, B, rec("theirs", NOW - 1000, { prompt: "Unrelated request in chat B" }));
+    const right = await label(s, "right", NOW, A);
     assert.equal(right?.id, "asked");
     assert.equal(right?.label, "opus");
-    assert.equal((await label(s, "sonnet", NOW))?.label, "sonnet");
-    assert.equal(await label(memory(), "right", NOW), null);
+    assert.equal((await label(s, "haiku", NOW, A))?.prompt, "my request in chat A");
+    const b = (await readSince(s, NOW - DAY)).find((e) => e.id === "theirs");
+    assert.equal(b?.label, undefined, "chat B's turn is never labelled from chat A");
+    assert.equal((await readSince(s, NOW - DAY)).find((e) => e.id === "agent:x")?.label, undefined);
+    assert.equal(await label(s, "right", NOW, "sess-c"), null);
   });
 
-  test("prune drops days past the keep, then the oldest past the cap, never today", async () => {
+  test("prune drops days past the keep, then the oldest days past the cap, never today", async () => {
     const s = memory();
-    await s.set(dayKey(NOW - 40 * DAY), [rec("ancient", NOW - 40 * DAY)]);
-    await s.set(dayKey(NOW - 3 * DAY), Array.from({ length: LEDGER_MAX }, (_, i) => rec(`o${i}`, NOW - 3 * DAY)));
-    await s.set(dayKey(NOW), [rec("today", NOW)]);
+    await s.set(ledgerKey(NOW - 40 * DAY, A), [rec("ancient", NOW - 40 * DAY)]);
+    await s.set(ledgerKey(NOW - 3 * DAY, A), Array.from({ length: LEDGER_MAX - 10 }, (_, i) => rec(`o${i}`, NOW - 3 * DAY)));
+    await s.set(ledgerKey(NOW - 3 * DAY, B), Array.from({ length: 20 }, (_, i) => rec(`p${i}`, NOW - 3 * DAY)));
+    await s.set(ledgerKey(NOW, A), [rec("today", NOW)]);
     await s.set("session:other", { keep: true });
-    assert.equal(await prune(s, NOW), 2);
-    assert.deepEqual([...s.m.keys()].sort(), ["ledger:2026-10-25", "session:other"]);
+    assert.equal(await prune(s, NOW), 3);
+    assert.deepEqual([...s.m.keys()].sort(), ["ledger:2026-10-25:sess-a", "session:other"]);
+    // Under the cap, nothing within the days goes.
+    await s.set(ledgerKey(NOW - DAY, B), [rec("y", NOW - DAY)]);
+    assert.equal(await prune(s, NOW), 0);
+  });
+
+  test("the whole prompt's digest is kept, and tells apart prompts that start alike", () => {
+    const head = "Project rules: ".padEnd(LEDGER_PROMPT, "x");
+    const one = entryOf({ prompt: `${head} fix the login bug`, ms: 1 }, "1", NOW);
+    const two = entryOf({ prompt: `${head} write the release notes`, ms: 1 }, "2", NOW);
+    assert.equal(one.prompt, two.prompt);
+    assert.notEqual(one.digest, two.digest);
+    assert.equal(one.digest, promptDigest(`${head}   fix the login bug\n`), "whitespace is folded");
+    assert.match(one.digest!, /^[0-9a-f]{14}$/);
   });
 });
 
@@ -160,6 +212,9 @@ describe("ledger: stats", () => {
     assert.match(text, /verdicts\s+3 labelled: 33% right, 1 too low, 1 too high \(Jev 50% of 2, d3-turbo 0% of 1\)/);
     assert.match(statsReport(statsOf([]), "24 hours"), /No routed turns in this window yet/);
     assert.match(statsReport(statsOf(entries.slice(3)), "7 days"), /verdicts\s+none yet/);
+    assert.match(statsReport(statsOf(entries), "7 days", { count: 2, reason: "store over 4 MiB" }), /missing\s+2 ledger writes failed in this session \(store over 4 MiB\): those turns are not counted/);
+    assert.match(statsReport(statsOf([]), "7 days", { count: 1, reason: "x" }), /missing\s+1 ledger write failed/);
+    assert.doesNotMatch(statsReport(statsOf(entries), "7 days", { count: 0, reason: "" }), /missing/);
   });
 
   test("windows", () => {
@@ -169,9 +224,13 @@ describe("ledger: stats", () => {
     assert.equal(windowOf("week"), null);
   });
 
-  test("the label reply", () => {
-    assert.match(labelReply(rec("refactor the parser", NOW, { label: "opus" }), "right"), /Labelled "refactor the parser" opus: Jev said opus, and you agree/);
-    assert.match(labelReply(rec("p", NOW, { label: "sonnet" }), "sonnet"), /Labelled "p" sonnet: Jev said opus\./);
-    assert.match(labelReply(null, "right"), /No routed turn/);
+  test("the label reply names the turn it labelled", () => {
+    assert.match(
+      labelReply(rec("refactor the parser", NOW - 5000, { label: "opus" }), "right", NOW),
+      /Labelled "refactor the parser" \(this chat's last decided turn, just now\) opus: Jev said opus, and you agree/,
+    );
+    assert.match(labelReply(rec("p", NOW - 12 * 60_000, { label: "sonnet" }), "sonnet", NOW), /Labelled "p" \(this chat's last decided turn, 12 min ago\) sonnet: Jev said opus\./);
+    assert.match(labelReply(rec("p", NOW - 3 * 3_600_000, { label: "sonnet" }), "sonnet", NOW), /3 h ago/);
+    assert.match(labelReply(null, "right", NOW), /No routed turn of this session/);
   });
 });

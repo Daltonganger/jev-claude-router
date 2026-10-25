@@ -20,14 +20,22 @@
   the turn unrouted. `JEV_ROUTER_PARALLEL=0` asks them one after another, as
   before. `/jev` says which.
 - **A ledger of routed turns** in the plugin store (30 days, at most 1,500
-  turns; the first 200 characters of each prompt, what Jev named, what ran, the
-  decision time, tokens and cost). `JEV_ROUTER_LEDGER=0` keeps none.
+  turns; the first 200 characters of each prompt and a digest of the whole
+  one, what Jev named, what ran, the decision time, tokens and cost), kept
+  under one key per day and session, so sessions running at once never write
+  over each other's records. The days and the cap are kept at the start of a
+  session and hourly while it runs. `JEV_ROUTER_LEDGER=0` keeps none.
 - **`/jev stats [24h|7d|30d]`**: turns per tier, who decided and how fast,
   unrouted turns and why, spend against the same tokens on always-sonnet and
-  always-opus, and your verdicts.
-- **`/jev right` and `/jev wrong <tier>`** label the last routed turn, and
-  `npm run bench:ledger` writes the labelled turns as a test set for
-  `bench:run`, with the whole prompt found again in the session's transcript.
+  always-opus, and your verdicts. Ledger writes the store refused in this
+  session are named, since those turns are missing from the figures.
+- **`/jev right` and `/jev wrong <tier>`** label this chat's last turn of the
+  main loop that Jev decided (never another chat's, never a subagent's) and
+  say which turn that was; the verdict stays when the turn's usage is written
+  after it. `npm run bench:ledger` writes the labelled turns as a test set for
+  `bench:run`, with the whole prompt found again in the session's transcript
+  by its digest, so two requests behind the same 200 characters keep their
+  own prompt and verdict.
 - **Wording per decision model** (`JEV_ROUTER_WORDING`,
   `microsoft-decision-1=sonnet-wider`): a model can be asked with other tier
   descriptions than the router's own, as `scripts/bench` measures them.

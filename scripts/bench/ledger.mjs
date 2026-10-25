@@ -6,9 +6,13 @@
  *
  *   node --experimental-strip-types scripts/bench/ledger.mjs [--store ~/.claude/plugins/store] [--dir ~/.claude/projects] [--out cases-ledger.jsonl] [--all] [--exclude cases.jsonl]
  *
- * The ledger keeps the first 200 characters of a prompt; the whole prompt (up
- * to the 600 `bench:extract` keeps) is found again in the session's transcript
- * under --dir, and the 200 are used when it is not there any more.
+ * The ledger keeps the first 200 characters of a prompt and a digest of the
+ * whole one; the whole prompt is found again in the session's transcript under
+ * --dir by that digest, so two requests behind the same 200 characters (a
+ * project's template) are never mixed up. The 200 are used when the transcript
+ * is not there any more. A record from before the digest is found by its 200
+ * characters only when one prompt in the transcript starts with them; when
+ * several do, it is left out as ambiguous rather than given another's prompt.
  *
  * `--all` writes the unlabelled turns too, with `tier: null`, to label with
  * scripts/bench/label.mjs. Each line: {"id", "prompt", "tier", "jev", "decider", "at"}.
@@ -19,6 +23,7 @@ import { basename, join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 
+import { promptDigest } from "../../hooks/ledger.ts";
 import { typedPrompt } from "./extract.mjs";
 
 const TIERS = ["haiku", "sonnet", "opus", "fable"];
@@ -38,14 +43,23 @@ export function ledgerEntries(json) {
 
 const norm = (s) => s.replace(/\s+/g, " ").trim();
 
-/** The whole typed prompt that starts with `head`, from the session's transcript lines. */
-export function wholePrompt(head, lines) {
-  const want = norm(head);
+/**
+ * A record's whole typed prompt from its session's transcript lines:
+ * `{ text }` when found, `{ ambiguous: n }` when a record without a digest
+ * matches n different prompts by its start, null when it is not there.
+ */
+export function wholePrompt(entry, lines) {
+  const want = norm(entry.prompt);
+  const starting = new Map();
   for (const line of lines) {
     const text = typedPrompt(line);
-    if (text !== null && norm(text).startsWith(want)) return text;
+    if (text === null) continue;
+    if (entry.digest) {
+      if (promptDigest(text) === entry.digest) return { text };
+    } else if (norm(text).startsWith(want)) starting.set(norm(text), text);
   }
-  return null;
+  if (starting.size === 1) return { text: [...starting.values()][0] };
+  return starting.size > 1 ? { ambiguous: starting.size } : null;
 }
 
 function* files(dir, test) {
@@ -79,9 +93,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const dir = arg("dir", join(homedir(), ".claude", "projects"));
   const out = arg("out", "cases-ledger.jsonl");
   const all = process.argv.includes("--all");
+  // Prompts already written or excluded, by the digest of the whole prompt.
   const seen = new Set();
   for (const f of arg("exclude", "").split(",").map((s) => s.trim()).filter(Boolean))
-    for (const l of readFileSync(f, "utf8").split("\n").filter(Boolean)) seen.add(norm(JSON.parse(l).prompt));
+    for (const l of readFileSync(f, "utf8").split("\n").filter(Boolean)) seen.add(promptDigest(JSON.parse(l).prompt));
 
   const storeFiles = statSync(store, { throwIfNoEntry: false })?.isDirectory()
     ? [...files(store, (n) => n.startsWith("jev-claude-router") && n.endsWith(".json"))]
@@ -101,26 +116,35 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   for (const f of files(dir, (n) => n.endsWith(".jsonl"))) transcripts.set(basename(f, ".jsonl"), f);
   const cache = new Map();
   let whole = 0;
+  let ambiguous = 0;
   const rows = [];
   for (const e of wanted) {
     let prompt = e.prompt;
     const file = e.session ? transcripts.get(e.session) : undefined;
     if (file) {
       if (!cache.has(file)) cache.set(file, await linesOf(file));
-      const found = wholePrompt(e.prompt, cache.get(file));
+      const found = wholePrompt(e, cache.get(file));
+      if (found?.ambiguous) {
+        ambiguous++;
+        continue;
+      }
       if (found) {
-        prompt = found;
+        prompt = found.text;
         whole++;
       }
     }
-    if (seen.has(norm(prompt))) continue;
-    seen.add(norm(prompt));
+    // The whole prompt's digest, also when only its start is at hand.
+    const key = e.digest ?? promptDigest(prompt);
+    if (seen.has(key)) continue;
+    seen.add(key);
     rows.push({ id: rows.length + 1, prompt, tier: TIERS.includes(e.label) ? e.label : null, jev: e.jev, decider: e.decider ?? "Jev", at: new Date(e.at).toISOString() });
   }
   writeFileSync(out, rows.map((r) => JSON.stringify(r)).join("\n") + (rows.length ? "\n" : ""));
   const labelled = rows.filter((r) => r.tier).length;
   console.log(
-    `${rows.length} turns written to ${out} (${labelled} labelled, ${whole} with the whole prompt from the transcript). ` +
+    `${rows.length} turns written to ${out} (${labelled} labelled, ${whole} with the whole prompt from the transcript` +
+      (ambiguous ? `; ${ambiguous} left out: an older record whose start matches several prompts in its transcript` : "") +
+      "). " +
       (labelled ? `Run them: npm run bench:run -- --cases ${out} --models …` : "Label turns with /jev right or /jev wrong <tier>, or pass --all and label the file."),
   );
 }

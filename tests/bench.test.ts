@@ -18,6 +18,7 @@ import { seeded, typedPrompt } from "../scripts/bench/extract.mjs";
 // @ts-expect-error plain JavaScript modules
 import { merge } from "../scripts/bench/report.mjs";
 import { ledgerEntries, wholePrompt } from "../scripts/bench/ledger.mjs";
+import { promptDigest } from "../hooks/ledger.ts";
 // @ts-expect-error plain JavaScript modules
 import { barsReport, checkBar, pool } from "../scripts/bench/bars.mjs";
 // @ts-expect-error plain JavaScript modules
@@ -721,11 +722,18 @@ describe("bench:ledger: verdicts from the ledger as a test set", () => {
     assert.deepEqual(ledgerEntries({}), []);
   });
 
-  test("the whole prompt is found again by its first 200 characters", () => {
-    const long = `refactor the parser so that ${"x".repeat(400)}`;
-    const lines = [typed("something else"), typed(long)];
-    assert.equal(wholePrompt(long.slice(0, 200), lines), long);
-    assert.equal(wholePrompt("not there", lines), null);
+  test("the whole prompt is found again by its digest, never by a prompt that only starts alike", () => {
+    // Before: the first prompt starting with the kept 200 characters was taken.
+    const head = `Project rules for this repo: ${"x".repeat(200)}`;
+    const first = `${head} then fix the login bug`;
+    const second = `${head} then write the release notes`;
+    const lines = [typed("something else"), typed(first), typed(second)];
+    assert.deepEqual(wholePrompt({ prompt: second.slice(0, 200), digest: promptDigest(second) }, lines), { text: second });
+    assert.deepEqual(wholePrompt({ prompt: first.slice(0, 200), digest: promptDigest(first) }, lines), { text: first });
+    assert.equal(wholePrompt({ prompt: "not there", digest: promptDigest("not there") }, lines), null);
+    // A record from before the digest: found only when its start is one prompt's alone.
+    assert.deepEqual(wholePrompt({ prompt: second.slice(0, 200) }, lines), { ambiguous: 2 });
+    assert.deepEqual(wholePrompt({ prompt: "something" }, lines), { text: "something else" });
   });
 
   test("the script writes labelled turns, with the whole prompt where the transcript has it", async () => {
@@ -750,6 +758,30 @@ describe("bench:ledger: verdicts from the ledger as a test set", () => {
     const all = spawnSync(process.execPath, ["--experimental-strip-types", "scripts/bench/ledger.mjs", "--store", join(dir, "store.json"), "--dir", dir, "--out", out, "--all"], { encoding: "utf8" });
     assert.equal(all.status, 0, all.stderr);
     assert.equal(readFileSync(out, "utf8").trim().split("\n").length, 3, "the unlabelled routed turn joins with tier null; the unrouted one never");
+  });
+
+  test("two labelled turns behind the same 200 characters each keep their own prompt and verdict", async () => {
+    const { spawnSync } = await import("node:child_process");
+    const dir = mkdtempSync(join(tmpdir(), "ledger-"));
+    const head = `Project rules for this repo: ${"z".repeat(200)}`;
+    const first = `${head} then fix the login bug`;
+    const second = `${head} then write the release notes`;
+    const older = `${head} then something old`;
+    writeFileSync(join(dir, "store.json"), JSON.stringify({
+      "ledger:2026-10-25:s1": [
+        { id: "a", at: 1, session: "s1", prompt: first.slice(0, 200), digest: promptDigest(first), jev: "opus", label: "sonnet" },
+        { id: "b", at: 2, session: "s1", prompt: second.slice(0, 200), digest: promptDigest(second), jev: "opus", label: "haiku" },
+        // From before the digest, its start shared by three prompts in the transcript.
+        { id: "c", at: 3, session: "s1", prompt: older.slice(0, 200), jev: "opus", label: "fable" },
+      ],
+    }));
+    writeFileSync(join(dir, "s1.jsonl"), [first, second, older].map(typed).join("\n") + "\n");
+    const out = join(dir, "out.jsonl");
+    const r = spawnSync(process.execPath, ["--experimental-strip-types", "scripts/bench/ledger.mjs", "--store", join(dir, "store.json"), "--dir", dir, "--out", out], { encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+    const rows = readFileSync(out, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    assert.deepEqual(rows.map((x) => [x.prompt, x.tier]), [[first, "sonnet"], [second, "haiku"]]);
+    assert.match(r.stdout, /2 turns written .*; 1 left out: an older record whose start matches several prompts/);
   });
 });
 

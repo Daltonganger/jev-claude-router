@@ -89,9 +89,10 @@ Vercel AI Gateway), and nowhere else:
 On disk, in Claude Code's plugin store, the router keeps each session's
 routing history, including the first 400 characters of each prompt, for the
 last 20 sessions. It also keeps a ledger of routed turns for `/jev stats` and
-your verdicts: per turn the first 200 characters of the prompt, the session id,
-the tier Jev named and the one that ran, the decision time, tokens and cost,
-for 30 days and at most 1,500 turns. `JEV_ROUTER_LEDGER=0` keeps none.
+your verdicts: per turn the first 200 characters of the prompt and a digest of
+the whole one, the session id, the tier Jev named and the one that ran, the
+decision time, tokens and cost, for 30 days and at most 1,500 turns, one store
+key per day and session. `JEV_ROUTER_LEDGER=0` keeps none.
 
 ## Quick start
 
@@ -434,8 +435,8 @@ is left alone.
 | `/jev tiers on fable` | Bring a dropped tier back. |
 | `/jev compact`, `/jev compact on`, `/jev compact off` | Show or toggle compaction by Jev. |
 | `/jev stats`, `/jev stats 24h`, `/jev stats 30d` | How routing went over a window (7 days by default), from the ledger: turns per tier, who decided and how fast, unrouted turns and why, spend against the same tokens on always-sonnet and always-opus, and your verdicts. |
-| `/jev right` | Agree with the tier Jev named on the last routed turn. |
-| `/jev wrong opus` | Say the last routed turn should have run on another tier. Verdicts collect into a test set: `npm run bench:ledger`. |
+| `/jev right` | Agree with the tier Jev named on this chat's last routed turn (not a subagent's, not another chat's); the reply names the turn. |
+| `/jev wrong opus` | Say this chat's last routed turn should have run on another tier. Verdicts collect into a test set: `npm run bench:ledger`. |
 
 A command overrides the matching setting below for the rest of the session,
 and is kept across reloads.

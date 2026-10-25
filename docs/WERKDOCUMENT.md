@@ -509,6 +509,20 @@ Microsoft (eigen tekst van de router) goed van fout scheidt, dus `bars` in `cata
   43%, p ≈ 0,003). Dit is gevonden door 40 combinaties van model, tekst en balk te bekijken, dus het geldt pas als
   het op een derde, nieuwe set standhoudt. Eén configuratie toetsen: Microsoft, `sonnet-wider`, balk 0,85.
 
+**d3-turbo meten (open, 2026-10-25).** d3-turbo is in de eigen opstelling de eerste beslisser, maar nog niet op de
+gelabelde sets gemeten, en heeft dus geen balk. `bench:run` kan hem nu vragen (`vllm:vllm-sr/d3-turbo`). Proef op de
+12 voorbeeldvragen (alleen om de route te controleren): 10 van 12 exact, twee keer sonnet waar haiku het label was;
+Jev 1.14 12 van 12. Opdrachten voor de echte meting, zelfde werkwijze als voor de andere modellen:
+
+    VLLM_SR_API_KEY=… OPENROUTER_API_KEY=… npm run bench:run -- --cases cases.jsonl --tiers haiku,sonnet,opus \
+      --models vllm:vllm-sr/d3-turbo,typesafe/jev-1.14 --out d3-a.json
+    (idem met cases2.jsonl → d3-b.json en cases3.jsonl → d3-c.json)
+    npm run bench:bars -- d3-a.json d3-b.json
+
+Vooraf vastgelegd: een balk voor d3-turbo gaat alleen in `catalog.json` als `bench:bars` er op A + B een voorstelt
+en die op C standhoudt (zelfde toets als bij Microsoft). Geen balk is ook een uitkomst: dan beslist de standaardbalk
+alleen hoe vaak de router wisselt.
+
 ## 6. Compaction
 
 - Voorlopig Claude's eigen compaction behouden, vanwege Laya's kleinere invoerbudget.

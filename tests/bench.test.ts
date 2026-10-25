@@ -752,3 +752,26 @@ describe("bench:ledger: verdicts from the ledger as a test set", () => {
     assert.equal(readFileSync(out, "utf8").trim().split("\n").length, 3, "the unlabelled routed turn joins with tier null; the unrouted one never");
   });
 });
+
+
+describe("bench:run asks vLLM Semantic Router too", () => {
+  test("vllm:<model> is a route of its own", () => {
+    assert.deepEqual(specOf("vllm:vllm-sr/d3-turbo"), { route: "vllm", model: "vllm-sr/d3-turbo" });
+    assert.deepEqual(specOf("laya:multilingual"), { route: "laya", model: "multilingual" });
+    assert.deepEqual(specOf("typesafe/jev-1.14"), { route: "openrouter", model: "typesafe/jev-1.14" });
+  });
+
+  test("it is asked at its own address with its key, and read for its probabilities", async () => {
+    const seen: { url: string; auth: string | undefined }[] = [];
+    const answers = { tier: { type: "choice", choice: "opus", confidence: 0.99, probabilities: { haiku: 0.1, sonnet: 0.1, opus: 0.7, fable: 0.1 } }, effort: { type: "score", score: 2 } };
+    const fetchImpl = async (url: string, init: { headers: Record<string, string> }) => {
+      seen.push({ url, auth: init.headers.authorization });
+      return new Response(JSON.stringify({ answers }), { status: 200 });
+    };
+    const r = await run({ cases: [{ id: 1, prompt: "refactor it", tier: "opus" }], models: ["vllm:vllm-sr/d3-turbo"], base: "https://openrouter.ai", api: "decisions", key: "or", vllmKey: "v-key", fetchImpl, confidence: "router" });
+    assert.deepEqual(seen, [{ url: "https://decision.vllm-sr.ai/v1/systemone", auth: "Bearer v-key" }]);
+    const row = r.rows["vllm:vllm-sr/d3-turbo"]![0];
+    assert.equal(row.pick, "opus");
+    assert.ok(Math.abs(row.confidence - 0.6) < 1e-9, "its own 0.99 is not read: the probabilities are");
+  });
+});

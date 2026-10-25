@@ -487,6 +487,8 @@ own prompts: `npm run bench:extract` pulls the prompts you typed out of Claude C
 transcripts (locally, into `cases.jsonl`, which is git-ignored), `npm run bench:label`
 asks you for the tier each needs (1 haiku … 4 fable), and
 `OPENROUTER_API_KEY=… npm run bench:run -- --cases cases.jsonl --tiers haiku,sonnet,opus --models typesafe/jev-1.14,perplexity/pplx-decider-v1.2`
+vLLM Semantic Router is a route of its own: `vllm:vllm-sr/d3-turbo` in `--models`, with
+`VLLM_SR_API_KEY` set, read for its probabilities as the router reads it.
 (add `laya:<model>`, e.g. `laya:multilingual`, to ask your own Laya server too: its address is `LAYA_BASE_URL`, its key `LAYA_API_KEY`, and `--laya-catalog` lists its models)
 asks each model the router's own questions (`--tiers` limits the tiers on offer to the ones you really have: with Fable off, leave it out, or the models are asked to pick a tier you would never get) and prints, per model: how often it picks
 your tier, how often too low or too high, its calibration, how many answers clear the

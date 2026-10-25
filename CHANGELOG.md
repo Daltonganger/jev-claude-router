@@ -34,6 +34,9 @@
   `sonnet-wider` ships with the plugin; the catalog can add wordings and assign
   them (`wordings`, `deciderWordings`). None is assigned by default. `/jev`
   shows which model is asked with which.
+- **`bench:run` asks vLLM Semantic Router** (`vllm:vllm-sr/d3-turbo` in
+  `--models`, key `VLLM_SR_API_KEY`), read for its probabilities as the router
+  reads it, so d3-turbo can be measured on the same labelled sets as the others.
 
 ### Fixes
 

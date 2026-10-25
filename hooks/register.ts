@@ -3,12 +3,34 @@ import type { On } from "claude-code";
 import {
   askJev,
   askJevChain,
+  askJevRace,
+  messageOf,
+  preferOf,
+  staggerOf,
   timeoutOf,
   type HttpInitLike,
   type HttpResponseLike,
   type StateSource,
+  type Try,
 } from "./jev.ts";
 import { labelOf, withLabel } from "./label.ts";
+import { assignmentsOf, BUILTIN_WORDINGS, unknownNames, wordingFor } from "./wording.ts";
+import {
+  entryOf,
+  ledgerKey,
+  label as labelLedger,
+  labelReply,
+  ledgerOn,
+  prune as pruneLedger,
+  put as putLedger,
+  readSince,
+  statsOf,
+  statsReport,
+  windowOf,
+  withUsage,
+  type LedgerEntry,
+  type Store as LedgerStore,
+} from "./ledger.ts";
 import {
   TIER_ALIAS,
   MODEL_ID,
@@ -19,6 +41,7 @@ import {
   effortNamed,
   excludedTiers,
   firstTurnEffort,
+  flagOff,
   isContinuation,
   isEngineNudge,
   notifyContinueOf,
@@ -121,11 +144,49 @@ import {
   unknownCommandReply,
   ImitationFilter,
   isRouteLine,
+  words,
   type AgentTag,
   type Attempt,
 } from "./status.ts";
 
 /** The slice of the engine a Jev call needs; every hook's `$` has it. */
+type LedgerEngine = {
+  store: {
+    get: (key: string) => Promise<unknown>;
+    set: (key: string, value: unknown) => Promise<unknown>;
+    delete: (key: string) => Promise<unknown>;
+    keys: () => Promise<string[]>;
+  };
+};
+
+/** The store as the ledger takes it: the engine's members are called, never passed (see the loader test). */
+function ledgerStore($: LedgerEngine): LedgerStore {
+  return {
+    get: (key) => $.store.get(key),
+    set: (key, value) => $.store.set(key, value),
+    delete: (key) => $.store.delete(key),
+    keys: () => $.store.keys(),
+  };
+}
+
+/**
+ * Writes a ledger record into its session's day, then keeps the ledger to its
+ * days and cap when `prune` (hourly while a session runs, not only at its
+ * start). A full store must not cost the turn, so a failed write does not
+ * throw: it is answered with its reason, for `/jev stats` to say what is
+ * missing. A failed prune loses nothing, and the next one tries again.
+ */
+async function writeLedger($: LedgerEngine, record: { key: string; entry: LedgerEntry }, prune: boolean): Promise<string | null> {
+  let reason: string | null = null;
+  try {
+    await putLedger(ledgerStore($), record.entry, record.key);
+  } catch (error) {
+    reason = words(messageOf(error)).slice(0, 80);
+  }
+  if (prune) await pruneLedger(ledgerStore($), Date.now()).catch(() => 0);
+  return reason;
+}
+
 type Engine = {
   env: { get: (key: string) => Promise<string | undefined> };
   http: {
@@ -342,6 +403,16 @@ type Settings = {
   /** Every provider to try, in order; empty when none could be set up (`provider` then says why). */
   providers: readonly ProviderOk[];
   timeoutMs: number;
+  /** Several providers are asked at once (off: one after another, sharing the budget). */
+  parallel: boolean;
+  /** How long a later provider's answer waits for an earlier one still asking. */
+  preferMs: number;
+  /** How long each later provider waits for the ones before it before it is asked too; 0 asks all at once. */
+  staggerMs: number;
+  /** A record of each routed turn is kept in the store, for `/jev stats` and verdicts. */
+  ledger: boolean;
+  /** Wording names assigned that neither the plugin nor the catalog has. */
+  unknownWordings: readonly string[];
   offered: readonly Tier[];
   excluded: readonly Tier[];
   sticky: number | null;
@@ -538,10 +609,25 @@ async function seedSettings(
     VLLM_SR_API_KEY: await $.env.get("VLLM_SR_API_KEY"),
     VLLM_SR_MODEL: await $.env.get("VLLM_SR_MODEL"),
   });
+  // Each route's model with its own wording of the tier question, when it has
+  // one: the catalog's assignments, then yours, which win for the same key.
+  const available = { ...BUILTIN_WORDINGS, ...(catalog?.wordings ?? {}) };
+  const assigned = { ...(catalog?.deciderWordings ?? {}), ...assignmentsOf(await $.env.get("JEV_ROUTER_WORDING")) };
+  const worded: ProviderOk[] = routes.ok
+    ? routes.providers.map((p) => {
+        const found = wordingFor(assigned, available, p.name, p.model);
+        return found ? { ...p, wording: found.wording, wordingName: found.name } : p;
+      })
+    : [];
   return {
-    provider: routes.ok ? routes.providers[0]! : routes,
-    providers: routes.ok ? routes.providers : [],
+    provider: routes.ok ? worded[0]! : routes,
+    providers: worded,
+    unknownWordings: unknownNames(assigned, available),
     timeoutMs: timeoutOf(await $.env.get("JEV_ROUTER_TIMEOUT_MS")),
+    parallel: !flagOff(await $.env.get("JEV_ROUTER_PARALLEL")),
+    preferMs: preferOf(await $.env.get("JEV_ROUTER_PREFER_MS")),
+    staggerMs: staggerOf(await $.env.get("JEV_ROUTER_STAGGER_MS")),
+    ledger: ledgerOn(await $.env.get("JEV_ROUTER_LEDGER")),
     offered: tiers.offered,
     excluded: tiers.excluded,
     sticky: stickyOf(await $.env.get("JEV_ROUTER_STICKY"))
@@ -601,10 +687,12 @@ async function classify(
     timeoutMs: settings.timeoutMs,
     signal,
   };
-  // One provider asks as before; several share the budget, one after another.
-  return settings.providers.length > 1
-    ? askJevChain({ ...common, providers: settings.providers })
-    : askJev({ ...common, provider: settings.provider });
+  // One provider asks as before; several are asked at once (the first named
+  // preferred), or one after another sharing the budget with JEV_ROUTER_PARALLEL=0.
+  if (settings.providers.length <= 1) return askJev({ ...common, provider: settings.provider });
+  return settings.parallel
+    ? askJevRace({ ...common, providers: settings.providers, preferMs: settings.preferMs, staggerMs: settings.staggerMs })
+    : askJevChain({ ...common, providers: settings.providers });
 }
 
 /**
@@ -1052,6 +1140,47 @@ export function register(on: On) {
   const pending = new Set<string>();
   const attempts: Attempt[] = [];
   /**
+   * The ledger record of each attempt that has one: its day's key and what was
+   * written, so a step's usage updates it. In memory only: after a reload a
+   * turn still running keeps the record its decision wrote.
+   */
+  const ledgerOf = new WeakMap<Attempt, { key: string; entry: LedgerEntry }>();
+  /** The session the ledger files this copy's turns under, and labels in. */
+  const ledgerSession = (): string | undefined =>
+    snapshotKey?.startsWith(SNAPSHOT_PREFIX) ? snapshotKey.slice(SNAPSHOT_PREFIX.length) : undefined;
+  /** The record a decided turn writes, or null when the ledger is off or this copy is not the one acting. */
+  const ledgerNew = (attempt: Attempt, id: string, tries?: readonly Try[]): { key: string; entry: LedgerEntry } | null => {
+    if (!settings?.ledger || inert) return null;
+    const at = Date.now();
+    const session = ledgerSession();
+    const record = { key: ledgerKey(at, session), entry: entryOf(attempt, id, at, session, tries) };
+    ledgerOf.set(attempt, record);
+    return record;
+  };
+  /** Ledger writes the store refused this session, and the last reason, for `/jev stats`. */
+  const ledgerFailed = { count: 0, reason: "" };
+  let ledgerPrunedAt = 0;
+  /** Whether this write prunes too: once an hour. */
+  const ledgerPruneDue = (): boolean => {
+    const now = Date.now();
+    if (now - ledgerPrunedAt < 3_600_000) return false;
+    ledgerPrunedAt = now;
+    return true;
+  };
+  /** Counts a write the store refused. */
+  const ledgerNote = (reason: string | null): void => {
+    if (reason === null) return;
+    ledgerFailed.count++;
+    ledgerFailed.reason = reason;
+  };
+  /** The attempt's record with its usage so far, or null when it has none. */
+  const ledgerUsed = (attempt: Attempt): { key: string; entry: LedgerEntry } | null => {
+    const known = ledgerOf.get(attempt);
+    if (known === undefined || !settings?.ledger || inert) return null;
+    known.entry = withUsage(known.entry, attempt.usage, attempt.cost);
+    return known;
+  };
+  /**
    * turnId → its attempt, so each step's `stop` chunk can add what the API
    * reported to the right turn. The same objects as in `attempts`.
    */
@@ -1318,7 +1447,7 @@ export function register(on: On) {
   on("session.start", async ($, e, next) => {
     await $.command.register({
       name: "jev",
-      description: "Jev routing: status, on/off, sticky, price, ceiling, compact, quiet/loud.",
+      description: "Jev routing: status, stats, right/wrong, on/off, sticky, price, ceiling, compact, quiet/loud.",
     });
     surface = await surfaceOf($);
     settings = await seedSettings($, settings);
@@ -1332,6 +1461,11 @@ export function register(on: On) {
     // the moment it loads; an older copy then stands aside from the next
     // turn on, instead of both asking Jev on the first one.
     if (snapshotKey) inert = !(await ownsSession($, snapshotKey, birth, true, nonce));
+    // Days past the ledger's keep, and the oldest past its cap, go now.
+    if (settings.ledger && !inert) {
+      ledgerPrunedAt = Date.now();
+      await pruneLedger(ledgerStore($), ledgerPrunedAt).catch(() => 0);
+    }
     sessionModel = await sessionModelOf($);
     return next(e);
   });
@@ -1774,6 +1908,26 @@ export function register(on: On) {
       return { text: result.text };
     }
 
+    if (sub === "stats" || sub.startsWith("stats ")) {
+      const win = windowOf(sub.slice("stats".length).trim() || "7d");
+      if (win === null) return { text: `"/jev ${sub}" is not a window: /jev stats 24h, 7d or 30d (the ledger keeps 30 days).` };
+      if (!settings.ledger) return { text: "The ledger is off (JEV_ROUTER_LEDGER=0): no turns are kept to count." };
+      const now = Date.now();
+      return { text: statsReport(statsOf(await readSince(ledgerStore($), now - win.ms), settings.ttl), win.name, ledgerFailed) };
+    }
+
+    if (sub === "right" || sub === "wrong" || sub.startsWith("wrong ")) {
+      if (!settings.ledger) return { text: "The ledger is off (JEV_ROUTER_LEDGER=0): there is no turn to label." };
+      const named = sub.slice("wrong".length).trim();
+      if (sub !== "right" && !(TIERS as readonly string[]).includes(named))
+        return { text: "Say which tier it should have run on: /jev wrong haiku, sonnet, opus or fable. /jev right agrees with Jev." };
+      const verdict = sub === "right" ? "right" : (named as Tier);
+      // This session's own last decided turn of the main loop: never another
+      // chat's, never a subagent's (the ledger keeps each session apart).
+      const now = Date.now();
+      return { text: labelReply(await labelLedger(ledgerStore($), verdict, now, ledgerSession()), verdict, now) };
+    }
+
     // `/jev medium`, `/jev xhigh fable`: an effort on its own is the ceiling
     // command's shorthand. The removed toggles (`/jev xhigh on`) are named
     // and pointed at their replacement rather than silently read as status.
@@ -1803,6 +1957,11 @@ export function register(on: On) {
         surface,
         provider: settings.provider,
         providers: settings.providers.map((p) => p.name),
+        parallel: settings.parallel,
+        preferMs: settings.preferMs,
+        staggerMs: settings.staggerMs,
+        wordings: settings.providers.filter((p) => p.wordingName).map((p) => `${p.model} asked with ${p.wordingName}`),
+        unknownWordings: settings.unknownWordings,
         timeoutMs: settings.timeoutMs,
         sticky: settings.sticky,
         ...(overridden.has("sticky") ? {} : { bars: settings.bars }),
@@ -1892,6 +2051,8 @@ export function register(on: On) {
       continueFrom !== null &&
       offered.includes(continueFrom.tier);
     const askAbort = new AbortController();
+    /** Each decision model's part, when several were asked, for the ledger. */
+    let tries: readonly Try[] | undefined;
     const asking =
       isContinuation(e.text) || nudge || softNotify || forced !== null
         ? null
@@ -2043,11 +2204,11 @@ export function register(on: On) {
               ...(cacheExpired ? { cold: true } : {}),
             }
           : undefined;
+      const asked = asking === null ? { ok: false as const, reason: "you named the tier, so Jev was not asked", ms: 0 } : await asking;
+      tries = asked.tries;
       attempt = attemptOf(
         e.text,
-        asking === null
-          ? { ok: false, reason: "you named the tier, so Jev was not asked", ms: 0 }
-          : await asking,
+        asked,
         offered,
         {
           sticky: settings.sticky,
@@ -2092,6 +2253,8 @@ export function register(on: On) {
     }
     byTurn.set(e.turnId, attempt);
     trimByTurn(e.turnId);
+    const ledgered = ledgerNew(attempt, e.turnId, tries);
+    if (ledgered) ledgerNote(await writeLedger($, ledgered, ledgerPruneDue()));
 
     // The line goes into the reply's own text, in turn.step below. Render
     // hooks and $.ui.log both drew nothing in the desktop app; the model's
@@ -2427,6 +2590,8 @@ export function register(on: On) {
             // either double-subtracted a step already billed or dropped an
             // entire turn from the total. See addUsage's own note.
             spent += addUsage(attempt, usage, settings.ttl);
+            const used = ledgerUsed(attempt);
+            if (used) ledgerNote(await writeLedger($, used, ledgerPruneDue()));
           } else {
             // A step whose turn.start this copy never saw still cost money.
             spent += usageCost(usage.model, usage, settings.ttl) ?? 0;
@@ -2554,6 +2719,8 @@ export function register(on: On) {
       if (unbilled !== null && unbilled.kind === "stop" && unbilled.usage) {
         const usage = normalUsage(unbilled.usage);
         spent += attempt ? addUsage(attempt, usage, settings.ttl) : (usageCost(usage.model, usage, settings.ttl) ?? 0);
+        const used = attempt ? ledgerUsed(attempt) : null;
+        if (used) ledgerNote(await writeLedger($, used, ledgerPruneDue()));
         if (snapshotKey && settings && !inert) await saveSnapshot($, snapshotKey, stateToSave(), firstSave());
       }
     }
@@ -2595,18 +2762,19 @@ export function register(on: On) {
     }
 
     const description = typeof e.description === "string" ? e.description : "";
+    // A task's prompt can carry a notification (the model pasting one in):
+    // cut as a typed prompt is, so no result reaches Jev.
+    const asked = await classify(
+      $,
+      hasNotification(e.prompt) ? notificationStateOf(e.prompt) : e.prompt,
+      settings.offered,
+      settings,
+      undefined,
+      "task",
+    );
     const attempt = spawnAttemptOf(
       description,
-      // A task's prompt can carry a notification (the model pasting one in):
-      // cut as a typed prompt is, so no result reaches Jev.
-      await classify(
-        $,
-        hasNotification(e.prompt) ? notificationStateOf(e.prompt) : e.prompt,
-        settings.offered,
-        settings,
-        undefined,
-        "task",
-      ),
+      asked,
       settings.offered,
       { ...(typeof e.subagentType === "string" ? { type: e.subagentType } : {}), label: description },
       settings.ceiling,
@@ -2618,6 +2786,8 @@ export function register(on: On) {
     // Recorded once it started: a spawn another hook denied ran nowhere,
     // and is not an agent of the reply.
     if (started.agentId !== undefined) record(attempt);
+    const spawnLedgered = started.agentId !== undefined ? ledgerNew(attempt, `agent:${started.agentId}`, asked.tries) : null;
+    if (spawnLedgered) ledgerNote(await writeLedger($, spawnLedgered, ledgerPruneDue()));
     if (started.agentId !== undefined) {
       // Prefer dropping finished agents over FIFO: blind eviction silently
       // dropped effort routing for resumed agents. Always keep the id we

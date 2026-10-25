@@ -4,6 +4,7 @@ import { setEffortSupport, setLadderModels } from "../hooks/policy.ts";
 import { afterEach, describe, test } from "node:test";
 
 import { CATALOG_WAIT_MS, register } from "../hooks/register.ts";
+import { ledgerKey } from "../hooks/ledger.ts";
 
 // These suites exercise the window guard (a turn too long for a tier is moved
 // up, or held where it is), which needs a tier with a smaller window than the
@@ -51,6 +52,8 @@ function load(
   let modelsKeySent: string | undefined;
   /** Every routing request: where it went, and the authorization it carried. */
   const asked: { url: string; authorization: string | undefined }[] = [];
+  /** Each question's body as sent, for what it asked (wording, model). */
+  const bodies: Record<string, unknown>[] = [];
   /** Hosts whose routing requests fail with an HTTP error. */
   const failingHosts = new Set<string>();
 
@@ -91,6 +94,7 @@ function load(
         }
         fetches++;
         asked.push({ url, authorization: init?.headers?.authorization });
+        if (init?.body) bodies.push(JSON.parse(init.body));
         lastState = init?.body ? JSON.parse(init.body).state : undefined;
         const good = ok && ![...failingHosts].some((h) => url.includes(h));
         ok = true;
@@ -193,6 +197,7 @@ function load(
     modelsFetches: () => modelsFetches,
     /** The routing requests so far, in order. */
     asked: () => asked,
+    bodies: () => bodies,
     /** Makes every routing request to a URL containing `host` fail. */
     failHost: (host: string) => void failingHosts.add(host),
     modelsKeySent: () => modelsKeySent,
@@ -5772,7 +5777,53 @@ describe("register: Laya and a chain of providers (2026-10-21)", () => {
     assert.equal(kit.asked()[1]?.authorization, "Bearer or-key");
     assert.equal(kit.asked()[0]?.authorization, undefined, "the OpenRouter key never went to the NAS");
     assert.match(t.text, /opus · .* · Jev 97%/, "answered by Jev through OpenRouter, so it reads as Jev");
+    assert.match(await report(kit), /deciders\s+laya, openrouter at once/);
+  });
+
+  test("JEV_ROUTER_PARALLEL=0 asks them one after another, as before", async () => {
+    const kit = await started({ LAYA_BASE_URL: "https://nas.lan", OPENROUTER_API_KEY: "or-key", JEV_ROUTER_PROVIDER: "laya,openrouter", JEV_ROUTER_PARALLEL: "0" });
+    kit.setTier("opus", 0.97, 2, 0.9);
+    await turn(kit, "l9");
+    assert.deepEqual(kit.asked().map((a) => a.url), ["https://nas.lan/v1/systemone"], "Laya answered, so OpenRouter was never asked");
     assert.match(await report(kit), /fallback\s+laya → openrouter/);
+  });
+
+  test("asked at once, the first named wins when both answer", async () => {
+    const kit = await started({ LAYA_BASE_URL: "https://nas.lan", OPENROUTER_API_KEY: "or-key", JEV_ROUTER_PROVIDER: "laya,openrouter" });
+    kit.setTier("opus", 0.97, 2, 0.9);
+    const t = await turn(kit, "l10");
+    assert.equal(kit.asked().length, 2, "both were asked");
+    assert.match(t.text, /Laya/, "the line names Laya, the first in the list");
+  });
+
+  /** The ledger's records in the kit's store. */
+  const ledgered = async (kit: Awaited<ReturnType<typeof started>>) => {
+    const store = (kit.$ as unknown as { store: { keys: () => Promise<string[]>; get: (k: string) => Promise<unknown> } }).store;
+    const out: Record<string, unknown>[] = [];
+    for (const k of (await store.keys()).filter((k) => k.startsWith("ledger:"))) out.push(...((await store.get(k)) as Record<string, unknown>[]));
+    return out;
+  };
+
+  test("with a stagger, a first provider that answers is the only one asked, and the ledger says so", async () => {
+    const kit = await started({ LAYA_BASE_URL: "https://nas.lan", OPENROUTER_API_KEY: "or-key", JEV_ROUTER_PROVIDER: "laya,openrouter", JEV_ROUTER_STAGGER_MS: "400" });
+    kit.setTier("opus", 0.97, 2, 0.9);
+    const t = await turn(kit, "l11");
+    assert.deepEqual(kit.asked().map((a) => a.url), ["https://nas.lan/v1/systemone"]);
+    assert.match(t.text, /Laya/);
+    assert.match(await report(kit), /deciders\s+laya, openrouter, each next one asked 400ms after the one before without an answer, or at once when it fails/);
+    const [e] = await ledgered(kit);
+    assert.deepEqual((e?.tries as { name: string; outcome: string }[]).map((x) => [x.name, x.outcome]), [["laya", "won"], ["openrouter", "not asked"]]);
+  });
+
+  test("with a stagger, a failing first provider asks the next at once", async () => {
+    const kit = await started({ LAYA_BASE_URL: "https://nas.lan", OPENROUTER_API_KEY: "or-key", JEV_ROUTER_PROVIDER: "laya,openrouter", JEV_ROUTER_STAGGER_MS: "400" });
+    kit.failHost("nas.lan");
+    kit.setTier("opus", 0.97, 2, 0.9);
+    const t = await turn(kit, "l12");
+    assert.equal(kit.asked().length, 2);
+    assert.match(t.text, /Jev 97%/);
+    const [e] = await ledgered(kit);
+    assert.deepEqual((e?.tries as { name: string; outcome: string }[]).map((x) => [x.name, x.outcome]), [["laya", "failed"], ["openrouter", "won"]]);
   });
 
   test("a named route without its key stops the setup and says which variable", async () => {
@@ -5912,5 +5963,172 @@ describe("register: a bar for each decision model (2026-10-21)", () => {
   test("with stickiness off there is no bar line", async () => {
     const kit = await started({ JEV_ROUTER_DECIDER_BARS: "microsoft-decision-1=0.5", JEV_ROUTER_STICKY: "0" });
     assert.doesNotMatch(await report(kit), /bars\s/);
+  });
+});
+
+describe("register: the ledger, verdicts and /jev stats (2026-10-25)", () => {
+  const started = async (over: Record<string, string | undefined> = {}) => {
+    const kit = load({ AI_GATEWAY_API_KEY: "gw-key", JEV_ROUTER_STICKY: "1", ...over });
+    await kit.hooks.get("session.start")!(kit.$, {}, async (e: unknown) => e);
+    return kit;
+  };
+  type Kit = Awaited<ReturnType<typeof started>>;
+  const jev = async (kit: Kit, args: string) =>
+    (await kit.hooks.get('command.run:{"command":"jev"}')!(kit.$, { args })).text as string;
+  async function turn(kit: Kit, id: string, text = "implement it") {
+    await kit.hooks.get("turn.start")!(kit.$, { text, turnId: id }, async (e: unknown) => e);
+    await collect(kit.hooks.get("turn.step")!(kit.$, { turnId: id, index: 0 }, (e: { model: string }) => answeredBy(e.model ?? "claude-opus-5-5")));
+  }
+  const ledger = async (kit: Kit) => {
+    const store = (kit.$ as unknown as { store: { keys: () => Promise<string[]>; get: (k: string) => Promise<unknown> } }).store;
+    const out: Record<string, unknown>[] = [];
+    for (const k of (await store.keys()).filter((k) => k.startsWith("ledger:"))) out.push(...((await store.get(k)) as Record<string, unknown>[]));
+    return out;
+  };
+
+  test("a routed turn is kept with what Jev named, its tokens and its cost", async () => {
+    const kit = await started();
+    kit.setTier("opus", 0.95, 2);
+    await turn(kit, "g1", "refactor the parser");
+    const [e] = await ledger(kit);
+    assert.equal(e?.id, "g1");
+    assert.equal(e?.prompt, "refactor the parser");
+    assert.equal(e?.session, "sess-1");
+    assert.equal(e?.jev, "opus");
+    assert.equal(e?.tier, "opus");
+    assert.equal(e?.decider, "Jev");
+    assert.deepEqual(e?.tokens, { in: 1000, out: 3000, read: 9000, write: 0 });
+    assert.equal(typeof e?.cost, "number");
+  });
+
+  test("/jev right and /jev wrong label the last routed turn", async () => {
+    const kit = await started();
+    kit.setTier("opus", 0.95, 2);
+    await turn(kit, "g2", "rename foo to bar");
+    assert.match(await jev(kit, "wrong haiku"), /Labelled "rename foo to bar" \(this chat's last decided turn, just now\) haiku: Jev said opus\./);
+    assert.equal((await ledger(kit))[0]?.label, "haiku");
+    assert.match(await jev(kit, "right"), /and you agree/);
+    assert.equal((await ledger(kit))[0]?.label, "opus");
+    assert.match(await jev(kit, "wrong medium"), /Say which tier it should have run on/);
+  });
+
+  test("a verdict in one chat never labels another chat's turn on the same store", async () => {
+    // Before: the verdict went on the store's last decided turn, whoever's.
+    const store = new Map<string, unknown>();
+    const a = load({ AI_GATEWAY_API_KEY: "gw-key", JEV_ROUTER_STICKY: "1" }, { store, id: "sess-A" });
+    await a.hooks.get("session.start")!(a.$, {}, async (e: unknown) => e);
+    a.setTier("opus", 0.95, 2);
+    await turn(a as Kit, "a1", "my request in chat A");
+    // Chat B is another Claude Code process on the same plugin store: its
+    // turn, decided after A's, lands as that process writes it.
+    const later = Date.now() + 1000;
+    store.set(ledgerKey(later, "sess-B"), [{ id: "b1", session: "sess-B", at: later, prompt: "Unrelated request in chat B", ms: 300, jev: "haiku", tier: "haiku", decider: "Jev" }]);
+    assert.match(await jev(a as Kit, "wrong haiku"), /Labelled "my request in chat A"/);
+    const all = await ledger(a as Kit);
+    assert.equal(all.find((e) => e.id === "a1")?.label, "haiku");
+    assert.equal(all.find((e) => e.id === "b1")?.label, undefined);
+  });
+
+  test("a verdict given while the reply streams survives the turn's usage", async () => {
+    // Before: the stop chunk wrote the turn's record from memory, without the label.
+    const kit = await started();
+    kit.setTier("opus", 0.95, 2);
+    await kit.hooks.get("turn.start")!(kit.$, { text: "fix the flaky test", turnId: "s1" }, async (e: unknown) => e);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    async function* paused() {
+      yield { kind: "text", index: 0, text: "reply", ref: 1 };
+      await gate;
+      yield { kind: "stop", stopReason: "end_turn", usage: usage("claude-opus-5-5"), ref: 2 };
+      return { stopReason: "end_turn" };
+    }
+    const stream = collect(kit.hooks.get("turn.step")!(kit.$, { turnId: "s1", index: 0 }, paused));
+    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+    assert.match(await jev(kit, "wrong sonnet"), /Labelled "fix the flaky test"/);
+    release();
+    await stream;
+    const [e] = await ledger(kit);
+    assert.equal(e?.label, "sonnet");
+    assert.deepEqual(e?.tokens, { in: 1000, out: 3000, read: 9000, write: 0 });
+  });
+
+  test("/jev stats says how many ledger writes the store refused", async () => {
+    const kit = await started();
+    kit.setTier("opus", 0.95, 2);
+    const store = (kit.$ as unknown as { store: { set: (k: string, v: unknown) => Promise<void> } }).store;
+    const set = store.set;
+    store.set = async (k, v) => {
+      if (k.startsWith("ledger:")) throw new Error("store over 4 MiB");
+      return set(k, v);
+    };
+    await turn(kit, "f1");
+    assert.match(await jev(kit, "stats"), /missing\s+2 ledger writes failed in this session \(store over 4 MiB\)/);
+  });
+
+  test("/jev stats counts the window, verdicts included", async () => {
+    const kit = await started();
+    kit.setTier("opus", 0.95, 2);
+    await turn(kit, "g3");
+    await turn(kit, "g4");
+    await jev(kit, "right");
+    const text = await jev(kit, "stats");
+    assert.match(text, /Last 7 days:/);
+    assert.match(text, /turns\s+2 — opus 2 \(100%\)/);
+    assert.match(text, /decided\s+2 by Jev 2/);
+    assert.match(text, /spent\s+\$[\d.]+ at list price; the same tokens on always sonnet/);
+    assert.match(text, /verdicts\s+1 labelled: 100% right/);
+    assert.match(await jev(kit, "stats 24h"), /Last 24 hours:/);
+    assert.match(await jev(kit, "stats forever"), /is not a window/);
+  });
+
+  test("JEV_ROUTER_LEDGER=0 keeps nothing and says so", async () => {
+    const kit = await started({ JEV_ROUTER_LEDGER: "0" });
+    kit.setTier("opus", 0.95, 2);
+    await turn(kit, "g5");
+    assert.deepEqual(await ledger(kit), []);
+    assert.match(await jev(kit, "stats"), /The ledger is off/);
+    assert.match(await jev(kit, "right"), /The ledger is off/);
+  });
+
+  test("the help names the new commands", async () => {
+    const kit = await started();
+    assert.match(await jev(kit, "nonsense"), /stats \[24h\|7d\|30d\], right, wrong <tier>/);
+  });
+});
+
+
+describe("register: wording per decision model (2026-10-25)", () => {
+  const started = async (over: Record<string, string | undefined> = {}) => {
+    const kit = load({ JEV_ROUTER_STICKY: "1", JEV_ROUTER_PROVIDER: "openrouter", OPENROUTER_API_KEY: "or-key", ...over });
+    await kit.hooks.get("session.start")!(kit.$, {}, async (e: unknown) => e);
+    return kit;
+  };
+  type Kit = Awaited<ReturnType<typeof started>>;
+  const report = async (kit: Kit) => (await kit.hooks.get('command.run:{"command":"jev"}')!(kit.$, { args: "" })).text as string;
+  const ask = async (kit: Kit, id: string) => {
+    await kit.hooks.get("turn.start")!(kit.$, { text: "add a null check", turnId: id }, async (e: unknown) => e);
+    return kit.bodies().at(-1) as { questions: { tier: { criteria: Record<string, string>; instructions: string } } };
+  };
+
+  test("a model given its own wording is asked with it, and /jev says so", async () => {
+    const kit = await started({ JEV_ROUTER_JEV_MODEL: "microsoft/microsoft-decision-1", JEV_ROUTER_WORDING: "microsoft-decision-1=sonnet-wider" });
+    const body = await ask(kit, "w1");
+    assert.match(body.questions.tier.criteria.sonnet!, /^A contained change to existing code/);
+    assert.match(body.questions.tier.criteria.fable!, /^High complexity/, "a tier the wording leaves out keeps the router's text");
+    assert.match(await report(kit), /wording\s+microsoft\/microsoft-decision-1 asked with sonnet-wider/);
+  });
+
+  test("any other model keeps the router's wording", async () => {
+    const kit = await started({ JEV_ROUTER_WORDING: "microsoft-decision-1=sonnet-wider" });
+    const body = await ask(kit, "w2");
+    assert.match(body.questions.tier.criteria.sonnet!, /^Straightforward and minor/);
+    assert.doesNotMatch(await report(kit), /asked with/);
+  });
+
+  test("a name no wording has is said, and the router's own is used", async () => {
+    const kit = await started({ JEV_ROUTER_WORDING: "openrouter=bolder" });
+    const body = await ask(kit, "w3");
+    assert.match(body.questions.tier.criteria.sonnet!, /^Straightforward and minor/);
+    assert.match(await report(kit), /wording\s+unknown: bolder \(in neither the plugin nor the catalog/);
   });
 });

@@ -10,6 +10,8 @@
  *   node --experimental-strip-types scripts/bench/run.mjs --catalog     # the decision models on offer; needs no key
  *
  * Options:
+ *   vllm:<model>               in --models: vLLM Semantic Router (https://decision.vllm-sr.ai, key VLLM_SR_API_KEY),
+ *                               e.g. vllm:vllm-sr/d3-turbo. Read for its probabilities, as the router reads it.
  *   laya:<model>               in --models: your own Laya server instead of OpenRouter, e.g. laya:multilingual.
  *                               The address is LAYA_BASE_URL (or --laya-url), the key LAYA_API_KEY (none if the
  *                               server asks for none). Its confidence is read from x_jev_confidence.
@@ -72,16 +74,19 @@ export function wordingOf(raw, name = "wording") {
   return out;
 }
 
-/** `laya:multilingual` is a model on your Laya server; anything else is an OpenRouter model id. */
+/** vLLM Semantic Router's decision endpoint, as the router asks it (provider.ts). */
+export const VLLM_BASE = "https://decision.vllm-sr.ai";
+
+/** `laya:multilingual` is a model on your Laya server, `vllm:vllm-sr/d3-turbo` one on vLLM Semantic Router; anything else is an OpenRouter model id. */
 export function specOf(spec) {
-  const m = /^laya:(.+)$/.exec(spec);
-  return m ? { route: "laya", model: m[1] } : { route: "openrouter", model: spec };
+  const m = /^(laya|vllm):(.+)$/.exec(spec);
+  return m ? { route: m[1], model: m[2] } : { route: "openrouter", model: spec };
 }
 
 /** One question to one model. Resolves to a row; never throws. */
 export async function ask({ base, api, key, model, prompt, offered = TIERS, route = "openrouter", wording, fetchImpl = fetch }) {
   const laya = route === "laya";
-  const path = laya ? "/v1/systemone" : api === "systemone" ? "/api/v1/systemone" : "/api/alpha/decisions";
+  const path = laya || route === "vllm" ? "/v1/systemone" : api === "systemone" ? "/api/v1/systemone" : "/api/alpha/decisions";
   const body = { ...requestBodyOf(stateOf(prompt), offered, "prompt", wording), model };
   const started = performance.now();
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -157,7 +162,7 @@ async function pool(items, size, fn) {
 }
 
 /** Runs every model over every case. Returns { rows: { model: row[] }, summaries, agreement }. */
-export async function run({ cases, models, base, api, key, layaBase, layaKey = "", concurrency = 4, layaConcurrency = 1, confidence = "probabilities", offered = TIERS, wordings = [], fetchImpl }) {
+export async function run({ cases, models, base, api, key, layaBase, layaKey = "", vllmKey = "", concurrency = 4, layaConcurrency = 1, confidence = "probabilities", offered = TIERS, wordings = [], fetchImpl }) {
   const rows = {};
   // The built-in wording first, then each other; a model asked with several is listed once per wording.
   const variants = [undefined, ...wordings];
@@ -169,7 +174,9 @@ export async function run({ cases, models, base, api, key, layaBase, layaKey = "
         const r =
           route === "laya"
             ? await ask({ base: layaBase, api, key: layaKey, model, prompt: c.prompt, offered, route, wording, fetchImpl })
-            : await ask({ base, api, key, model, prompt: c.prompt, offered, wording, fetchImpl });
+            : route === "vllm"
+              ? await ask({ base: VLLM_BASE, api, key: vllmKey, model, prompt: c.prompt, offered, route, wording, fetchImpl })
+              : await ask({ base, api, key, model, prompt: c.prompt, offered, wording, fetchImpl });
         return { id: c.id, label: c.tier, ...r, confidence: confidence === "router" ? r.confidence : r.confidenceP };
       });
     }
@@ -248,6 +255,11 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     console.error("usage: OPENROUTER_API_KEY=… run.mjs --cases cases.jsonl --models a/b,c/d,laya:multilingual   (or --catalog)");
     process.exit(2);
   }
+  const vllmKey = (process.env.VLLM_SR_API_KEY ?? "").trim();
+  if (wanted.some((m) => specOf(m).route === "vllm") && !vllmKey) {
+    console.error("vllm:<model> needs VLLM_SR_API_KEY");
+    process.exit(2);
+  }
   if (wanted.some((m) => specOf(m).route === "laya") && !layaUrl.ok) {
     console.error(layaUrl.reason.replace("JEV_ROUTER_PROVIDER=laya but ", ""));
     process.exit(2);
@@ -277,7 +289,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   }
   if (wordings.length > 0) console.log(`Wording: the router's own, then ${wordings.map((w) => w.name).join(", ")}. Choose on one set of prompts and confirm on another.\n`);
   const mode = arg("confidence", "probabilities");
-  const result = await run({ cases, models, base, api: arg("api", "decisions"), key, layaBase: layaUrl.ok ? layaUrl.base : undefined, layaKey, concurrency: Number(arg("concurrency", "4")), layaConcurrency: Number(arg("laya-concurrency", "1")), confidence: mode, offered, wordings });
+  const result = await run({ cases, models, base, api: arg("api", "decisions"), key, layaBase: layaUrl.ok ? layaUrl.base : undefined, layaKey, vllmKey, concurrency: Number(arg("concurrency", "4")), layaConcurrency: Number(arg("laya-concurrency", "1")), confidence: mode, offered, wordings });
   console.log(`${cases.length} labelled prompts, ${models.length} models offered ${offered.join(", ")}, confidence read from ${mode === "router" ? "what the router reads" : "the probabilities"}\n`);
   console.log(table(result.summaries));
   for (const [model, rows] of Object.entries(result.rows)) {

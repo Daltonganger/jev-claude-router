@@ -495,6 +495,15 @@ export type Status = {
   provider: ProviderResult;
   /** Every provider, in the order they are tried; absent on older callers. */
   providers?: readonly string[];
+  /** Routes whose model is asked with other wording of the tier question, as "<model> asked with <name>". */
+  wordings?: readonly string[];
+  /** Wording names assigned that no wording has. */
+  unknownWordings?: readonly string[];
+  /** The providers are asked at once (the first named preferred, waiting `preferMs`); absent or false: one after another. */
+  parallel?: boolean;
+  preferMs?: number;
+  /** With `parallel`: how long each later provider waits for those before it before it is asked; 0 or absent: all at once. */
+  staggerMs?: number;
   timeoutMs: number;
   /** The confidence a switch must clear, or null when stickiness is off. */
   sticky: number | null;
@@ -1198,13 +1207,22 @@ export function statusReport(status: Status): string {
           : ""),
     );
     if (status.providers !== undefined && status.providers.length > 1)
-      lines.push(`  fallback  ${status.providers.join(" → ")} (the next is asked when one fails at once)`);
+      lines.push(
+        status.parallel
+          ? status.staggerMs
+            ? `  deciders  ${status.providers.join(", ")}, each next one asked ${status.staggerMs}ms after the one before without an answer, or at once when it fails (the first named wins if it answers within ${status.preferMs ?? 0}ms of another)`
+            : `  deciders  ${status.providers.join(", ")} at once (the first named wins if it answers within ${status.preferMs ?? 0}ms of another)`
+          : `  fallback  ${status.providers.join(" → ")} (the next is asked when one fails at once)`,
+      );
   } else {
     // The reason names the fix: a missing key, a bad base URL, a provider
     // forced without its key. "No keys" alone sent people after the wrong one.
     lines.push(`  provider  NOT SET UP — ${words(status.provider.reason)}; nothing will route`);
   }
 
+  for (const w of status.wordings ?? []) lines.push(`  wording   ${w}`);
+  if (status.unknownWordings?.length)
+    lines.push(`  wording   unknown: ${status.unknownWordings.join(", ")} (in neither the plugin nor the catalog; the router's own is used)`);
   lines.push(`  budget    ${status.timeoutMs}ms`);
   lines.push(
     `  sticky    ${
@@ -1717,7 +1735,7 @@ export class ImitationFilter<C extends { kind: "text"; index: number; text: stri
  */
 export function unknownCommandReply(arg: string, legacy: boolean): string {
   const usage =
-    "/jev (status), on, off, quiet, loud, sticky [off|0.6], price [on|off], " +
+    "/jev (status), stats [24h|7d|30d], right, wrong <tier>, on, off, quiet, loud, sticky [off|0.6], price [on|off], " +
     "compact [on|off], tiers [on|off <tier>], ceiling <effort> [tiers], " +
     "or an effort on its own (/jev xhigh fable).";
   return legacy

@@ -47,6 +47,9 @@ export type ProviderOk = {
   apiKey: string;
   /** Present when the route is asked through OpenRouter's Decisions API rather than System One. */
   api?: "decisions";
+  /** Other wording for the tier question, when this route's model has its own (see wording.ts). */
+  wording?: { criteria?: Partial<Record<"haiku" | "sonnet" | "opus" | "fable", string>>; instructions?: string };
+  wordingName?: string;
 };
 
 export type ProviderResult =

@@ -88,7 +88,11 @@ Vercel AI Gateway), and nowhere else:
 
 On disk, in Claude Code's plugin store, the router keeps each session's
 routing history, including the first 400 characters of each prompt, for the
-last 20 sessions.
+last 20 sessions. It also keeps a ledger of routed turns for `/jev stats` and
+your verdicts: per turn the first 200 characters of the prompt and a digest of
+the whole one, the session id, the tier Jev named and the one that ran, the
+decision time, tokens and cost, for 30 days and at most 1,500 turns, one store
+key per day and session. `JEV_ROUTER_LEDGER=0` keeps none.
 
 ## Quick start
 
@@ -430,6 +434,9 @@ is left alone.
 | `/jev tiers off fable` | Drop one or more tiers from the question entirely. |
 | `/jev tiers on fable` | Bring a dropped tier back. |
 | `/jev compact`, `/jev compact on`, `/jev compact off` | Show or toggle compaction by Jev. |
+| `/jev stats`, `/jev stats 24h`, `/jev stats 30d` | How routing went over a window (7 days by default), from the ledger: turns per tier, who decided and how fast, with several providers how often each was asked, won, lost, failed or timed out and its median answer time, unrouted turns and why, spend against the same tokens on always-sonnet and always-opus, and your verdicts. |
+| `/jev right` | Agree with the tier Jev named on this chat's last routed turn (not a subagent's, not another chat's); the reply names the turn. |
+| `/jev wrong opus` | Say this chat's last routed turn should have run on another tier. Verdicts collect into a test set: `npm run bench:ledger`. |
 
 A command overrides the matching setting below for the rest of the session,
 and is kept across reloads.
@@ -453,11 +460,15 @@ All settings go in the `env` block of `~/.claude/settings.json`.
 | `LAYA_BASE_URL` | | Your own Laya server, e.g. `https://nas.lan:8443`. https only, any host, no login in the URL; a trailing `/v1/systemone` is dropped. Setting it alone makes Laya the provider. |
 | `LAYA_MODEL` | `laya` | The model on your Laya server, e.g. `multilingual`. Use this rather than `JEV_ROUTER_JEV_MODEL` when Laya is one of several providers: that one reaches them all. |
 | `LAYA_API_KEY` | | Sent to the Laya server and nowhere else; leave unset for a server that asks for none. |
-| `JEV_ROUTER_PROVIDER` | TypeSafe if its key is set, else Laya if `LAYA_BASE_URL` is set, else the gateway | One of `typesafe` (or `direct`), `gateway` (or `vercel`), `openrouter`, `commandcode`, `opencode`, `laya`, or a list tried in order, e.g. `laya,openrouter`. A named route without its key or URL is an error. OpenRouter, Command Code and OpenCode are never chosen by their key alone, since those keys are used for other things; anything unrecognised chooses by the keys set. |
+| `JEV_ROUTER_PROVIDER` | TypeSafe if its key is set, else Laya if `LAYA_BASE_URL` is set, else the gateway | One of `typesafe` (or `direct`), `gateway` (or `vercel`), `openrouter`, `commandcode`, `opencode`, `laya`, or a list, e.g. `laya,openrouter`: asked at once, the first named preferred (see `JEV_ROUTER_PARALLEL`). A named route without its key or URL is an error. OpenRouter, Command Code and OpenCode are never chosen by their key alone, since those keys are used for other things; anything unrecognised chooses by the keys set. |
 | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | Must be https. Only `*.typesafe.ai` is accepted unless `JEV_ROUTER_ALLOW_CUSTOM_BASE=1`. A trailing `/v1/systemone` is dropped, since the router adds it. |
 | `JEV_ROUTER_ALLOW_CUSTOM_BASE` | off | `1` lets `TYPESAFE_BASE_URL` name any https host. That host receives your key and prompts, so set both only in your own `~/.claude/settings.json`, and check that a project's settings do not set them. |
 | `JEV_ROUTER_JEV_MODEL` | per route | Pin the model id (e.g. `jev-1.13.0` on TypeSafe direct) so confidences stay stable across releases. Defaults: `jev-latest` on TypeSafe, `typesafe/jev-1.14` on OpenRouter, `typesafe/jev-1.14.0` on Command Code, `laya` for Laya. The gateway serves its own. |
 | `JEV_ROUTER_TIMEOUT_MS` | `1500` | How long a turn waits for Jev, in milliseconds. At least 100 (anything less is taken for a mistake and the default used), at most 8000. |
+| `JEV_ROUTER_PARALLEL` | on | With several providers in `JEV_ROUTER_PROVIDER`, ask them all at once, each with the whole budget, and take the first in list order that answers. A slow first provider then no longer spends the others' time and leaves the turn unrouted. Each provider asked is billed for its question (about $0.00003). `0` asks them one after another, the next only when one fails at once, sharing one budget, as before. |
+| `JEV_ROUTER_PREFER_MS` | `300` | How long an answer from a later provider waits for an earlier one still asking, before it is taken: the list is a preference, not only a fallback. `0` takes whichever answers first. |
+| `JEV_ROUTER_STAGGER_MS` | `0` | With several providers asked at once: how long each later provider waits for the ones before it to answer before it is asked too (the second after this long, the third after twice). A provider whose predecessors all failed is asked at once, and one not asked yet when an answer is taken is never asked, so a fast first provider costs one request instead of one per provider. All share one budget. `0` asks them all together. Set it from the answer times `/jev stats` shows per provider. |
+| `JEV_ROUTER_LEDGER` | on | Keep a record of each routed turn in the plugin store (30 days, at most 1,500 turns) for `/jev stats` and `/jev right`/`wrong`. `0` keeps none. |
 
 **Laya, and a fallback.** Laya is a Jev-compatible model you run yourself. Its own
 `confidence` is a different quantity from Jev's (one minus the normalised entropy), so
@@ -478,6 +489,8 @@ own prompts: `npm run bench:extract` pulls the prompts you typed out of Claude C
 transcripts (locally, into `cases.jsonl`, which is git-ignored), `npm run bench:label`
 asks you for the tier each needs (1 haiku … 4 fable), and
 `OPENROUTER_API_KEY=… npm run bench:run -- --cases cases.jsonl --tiers haiku,sonnet,opus --models typesafe/jev-1.14,perplexity/pplx-decider-v1.2`
+vLLM Semantic Router is a route of its own: `vllm:vllm-sr/d3-turbo` in `--models`, with
+`VLLM_SR_API_KEY` set, read for its probabilities as the router reads it.
 (add `laya:<model>`, e.g. `laya:multilingual`, to ask your own Laya server too: its address is `LAYA_BASE_URL`, its key `LAYA_API_KEY`, and `--laya-catalog` lists its models)
 asks each model the router's own questions (`--tiers` limits the tiers on offer to the ones you really have: with Fable off, leave it out, or the models are asked to pick a tier you would never get) and prints, per model: how often it picks
 your tier, how often too low or too high, its calibration, how many answers clear the
@@ -507,6 +520,7 @@ flattered by them, so choose on one set and confirm on another that shares nothi
 | `JEV_ROUTER_STICKY` | on | `0` removes the confidence bar. |
 | `JEV_ROUTER_STICKY_CONFIDENCE` | `0.75` | The confidence bar: `0.6`, `60` or `60%`. |
 | `JEV_ROUTER_DECIDER_BARS` | | A bar for particular decision models, in place of the one above: `microsoft-decision-1=0.5,laya=60%`. A key is a full model id, the id after its `/`, or a route name. For a model whose confidence is not Jev's (`bench:bars` shows where one would help), and `catalog.json` can recommend one for everyone (`bars`). A bar you set for every decider yourself keeps the catalog's out; one you name for a model is always yours; `/jev sticky` overrides all. |
+| `JEV_ROUTER_WORDING` | | Other wording of the tier question for particular decision models: `microsoft-decision-1=sonnet-wider`. A key is a full model id, the id after its `/`, or a route name, as for the bars; a name is `sonnet-wider` (shipped, from `scripts/bench/criteria/`) or one the catalog adds (`wordings`, and `deciderWordings` to assign them for everyone). Yours win over the catalog's for the same key. A bar measured with one wording does not hold for another, so set the model's bar with it. `/jev` shows which model is asked with which. |
 | `JEV_ROUTER_PRICE_CHECK` | on | `0` turns both price checks off. |
 | `JEV_ROUTER_UPGRADE_MAX` | `1` | Dollars an upgrade may cost over staying (a plain number, `$` allowed), or `off`. |
 | `JEV_ROUTER_CACHE_TTL` | `1h` | Cache lifetime used for pricing: `1h` (what Claude Code writes) or `5m`. |
@@ -569,6 +583,7 @@ npm run try-prompts            # Jev's tier, effort and confidence on sample pro
 npm run try-prompts -- "text"  # the same for one prompt
 npm run measure-switch-cost    # what a switch costs at each context size
 npm run bench-overhead         # engine calls and plugin time per turn, with a fake engine
+npm run bench:ledger           # your /jev right and /jev wrong verdicts as a test set (cases-ledger.jsonl)
 ```
 
 `try-prompts` is the tuning loop: edit `TIER_CRITERIA`, run it, check the
@@ -612,6 +627,9 @@ npm run setup    # once per clone: fetch Claude Code's type definitions into
                  # .claude/types, and validate the plugin before every commit
 npm run check    # typecheck, tests, plugin validate
 ```
+
+GitHub Actions runs the same checks on every push and pull request
+(`.github/workflows/check.yml`).
 
 Always run `claude plugin validate`. It checks the engine's load-time rules
 without executing anything. The rule that matters most: `$` may only be

@@ -8,6 +8,60 @@
   into it.
 -->
 
+## Unreleased
+
+### Features
+
+- **Several decision models are asked at once.** With a list in
+  `JEV_ROUTER_PROVIDER`, every provider is asked together with the whole
+  budget, and the first in list order that answers is taken; a later one that
+  answers sooner waits `JEV_ROUTER_PREFER_MS` (300) for an earlier one still
+  asking. A slow first provider no longer spends the others' time and leaves
+  the turn unrouted. `JEV_ROUTER_PARALLEL=0` asks them one after another, as
+  before. `/jev` says which.
+- **A staggered reserve** (`JEV_ROUTER_STAGGER_MS`, off by default): each later
+  provider is asked only when the ones before it have not answered within
+  that time, or at once when they failed, so a fast first provider costs one
+  request. The ledger keeps each provider's part in a decision (asked or not,
+  when, how it ended), and `/jev stats` shows per provider how often it won,
+  lost, failed or timed out, and its median answer time.
+- **A ledger of routed turns** in the plugin store (30 days, at most 1,500
+  turns; the first 200 characters of each prompt and a digest of the whole
+  one, what Jev named, what ran, the decision time, tokens and cost), kept
+  under one key per day and session, so sessions running at once never write
+  over each other's records. The days and the cap are kept at the start of a
+  session and hourly while it runs. `JEV_ROUTER_LEDGER=0` keeps none.
+- **`/jev stats [24h|7d|30d]`**: turns per tier, who decided and how fast,
+  unrouted turns and why, spend against the same tokens on always-sonnet and
+  always-opus, and your verdicts. Ledger writes the store refused in this
+  session are named, since those turns are missing from the figures.
+- **`/jev right` and `/jev wrong <tier>`** label this chat's last turn of the
+  main loop that Jev decided (never another chat's, never a subagent's) and
+  say which turn that was; the verdict stays when the turn's usage is written
+  after it. `npm run bench:ledger` writes the labelled turns as a test set for
+  `bench:run`, with the whole prompt found again in the session's transcript
+  by its digest, so two requests behind the same 200 characters keep their
+  own prompt and verdict.
+- **Wording per decision model** (`JEV_ROUTER_WORDING`,
+  `microsoft-decision-1=sonnet-wider`): a model can be asked with other tier
+  descriptions than the router's own, as `scripts/bench` measures them.
+  `sonnet-wider` ships with the plugin; the catalog can add wordings and assign
+  them (`wordings`, `deciderWordings`). None is assigned by default. `/jev`
+  shows which model is asked with which.
+- **`bench:run` asks vLLM Semantic Router** (`vllm:vllm-sr/d3-turbo` in
+  `--models`, key `VLLM_SR_API_KEY`), read for its probabilities as the router
+  reads it, so d3-turbo can be measured on the same labelled sets as the others.
+
+### Chores
+
+- GitHub Actions runs the typecheck, the tests and `claude plugin validate`
+  on every push and pull request.
+
+### Fixes
+
+- `npm run typecheck` passes again: a score answer's `probabilities` was read
+  without being in its type.
+
 ## 1.2.0 — 2026-10-23
 
 ### Features

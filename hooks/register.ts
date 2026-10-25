@@ -12,6 +12,22 @@ import {
 } from "./jev.ts";
 import { labelOf, withLabel } from "./label.ts";
 import {
+  dayKey,
+  entryOf,
+  label as labelLedger,
+  labelReply,
+  ledgerOn,
+  prune as pruneLedger,
+  put as putLedger,
+  readSince,
+  statsOf,
+  statsReport,
+  windowOf,
+  withUsage,
+  type LedgerEntry,
+  type Store as LedgerStore,
+} from "./ledger.ts";
+import {
   TIER_ALIAS,
   MODEL_ID,
   asAsked,
@@ -129,6 +145,34 @@ import {
 } from "./status.ts";
 
 /** The slice of the engine a Jev call needs; every hook's `$` has it. */
+type LedgerEngine = {
+  store: {
+    get: (key: string) => Promise<unknown>;
+    set: (key: string, value: unknown) => Promise<unknown>;
+    delete: (key: string) => Promise<unknown>;
+    keys: () => Promise<string[]>;
+  };
+};
+
+/** The store as the ledger takes it: the engine's members are called, never passed (see the loader test). */
+function ledgerStore($: LedgerEngine): LedgerStore {
+  return {
+    get: (key) => $.store.get(key),
+    set: (key, value) => $.store.set(key, value),
+    delete: (key) => $.store.delete(key),
+    keys: () => $.store.keys(),
+  };
+}
+
+/** Writes a ledger record into its day. A full store must not cost the turn, so a failure is dropped. */
+async function writeLedger($: LedgerEngine, record: { key: string; entry: LedgerEntry }): Promise<void> {
+  try {
+    await putLedger(ledgerStore($), record.entry, record.key);
+  } catch {
+    // Dropped: the ledger is a record, not the turn.
+  }
+}
+
 type Engine = {
   env: { get: (key: string) => Promise<string | undefined> };
   http: {
@@ -349,6 +393,8 @@ type Settings = {
   parallel: boolean;
   /** How long a later provider's answer waits for an earlier one still asking. */
   preferMs: number;
+  /** A record of each routed turn is kept in the store, for `/jev stats` and verdicts. */
+  ledger: boolean;
   offered: readonly Tier[];
   excluded: readonly Tier[];
   sticky: number | null;
@@ -551,6 +597,7 @@ async function seedSettings(
     timeoutMs: timeoutOf(await $.env.get("JEV_ROUTER_TIMEOUT_MS")),
     parallel: !flagOff(await $.env.get("JEV_ROUTER_PARALLEL")),
     preferMs: preferOf(await $.env.get("JEV_ROUTER_PREFER_MS")),
+    ledger: ledgerOn(await $.env.get("JEV_ROUTER_LEDGER")),
     offered: tiers.offered,
     excluded: tiers.excluded,
     sticky: stickyOf(await $.env.get("JEV_ROUTER_STICKY"))
@@ -1063,6 +1110,28 @@ export function register(on: On) {
   const pending = new Set<string>();
   const attempts: Attempt[] = [];
   /**
+   * The ledger record of each attempt that has one: its day's key and what was
+   * written, so a step's usage updates it. In memory only: after a reload a
+   * turn still running keeps the record its decision wrote.
+   */
+  const ledgerOf = new WeakMap<Attempt, { key: string; entry: LedgerEntry }>();
+  /** The record a decided turn writes, or null when the ledger is off or this copy is not the one acting. */
+  const ledgerNew = (attempt: Attempt, id: string): { key: string; entry: LedgerEntry } | null => {
+    if (!settings?.ledger || inert) return null;
+    const at = Date.now();
+    const session = snapshotKey ? snapshotKey.slice(SNAPSHOT_PREFIX.length) : undefined;
+    const record = { key: dayKey(at), entry: entryOf(attempt, id, at, session) };
+    ledgerOf.set(attempt, record);
+    return record;
+  };
+  /** The attempt's record with its usage so far, or null when it has none. */
+  const ledgerUsed = (attempt: Attempt): { key: string; entry: LedgerEntry } | null => {
+    const known = ledgerOf.get(attempt);
+    if (known === undefined || !settings?.ledger || inert) return null;
+    known.entry = withUsage(known.entry, attempt.usage, attempt.cost);
+    return known;
+  };
+  /**
    * turnId → its attempt, so each step's `stop` chunk can add what the API
    * reported to the right turn. The same objects as in `attempts`.
    */
@@ -1329,7 +1398,7 @@ export function register(on: On) {
   on("session.start", async ($, e, next) => {
     await $.command.register({
       name: "jev",
-      description: "Jev routing: status, on/off, sticky, price, ceiling, compact, quiet/loud.",
+      description: "Jev routing: status, stats, right/wrong, on/off, sticky, price, ceiling, compact, quiet/loud.",
     });
     surface = await surfaceOf($);
     settings = await seedSettings($, settings);
@@ -1343,6 +1412,8 @@ export function register(on: On) {
     // the moment it loads; an older copy then stands aside from the next
     // turn on, instead of both asking Jev on the first one.
     if (snapshotKey) inert = !(await ownsSession($, snapshotKey, birth, true, nonce));
+    // Days past the ledger's keep, and the oldest past its cap, go now.
+    if (settings.ledger && !inert) await pruneLedger(ledgerStore($), Date.now()).catch(() => 0);
     sessionModel = await sessionModelOf($);
     return next(e);
   });
@@ -1785,6 +1856,23 @@ export function register(on: On) {
       return { text: result.text };
     }
 
+    if (sub === "stats" || sub.startsWith("stats ")) {
+      const win = windowOf(sub.slice("stats".length).trim() || "7d");
+      if (win === null) return { text: `"/jev ${sub}" is not a window: /jev stats 24h, 7d or 30d (the ledger keeps 30 days).` };
+      if (!settings.ledger) return { text: "The ledger is off (JEV_ROUTER_LEDGER=0): no turns are kept to count." };
+      const now = Date.now();
+      return { text: statsReport(statsOf(await readSince(ledgerStore($), now - win.ms, now), settings.ttl), win.name) };
+    }
+
+    if (sub === "right" || sub === "wrong" || sub.startsWith("wrong ")) {
+      if (!settings.ledger) return { text: "The ledger is off (JEV_ROUTER_LEDGER=0): there is no turn to label." };
+      const named = sub.slice("wrong".length).trim();
+      if (sub !== "right" && !(TIERS as readonly string[]).includes(named))
+        return { text: "Say which tier it should have run on: /jev wrong haiku, sonnet, opus or fable. /jev right agrees with Jev." };
+      const verdict = sub === "right" ? "right" : (named as Tier);
+      return { text: labelReply(await labelLedger(ledgerStore($), verdict, Date.now()), verdict) };
+    }
+
     // `/jev medium`, `/jev xhigh fable`: an effort on its own is the ceiling
     // command's shorthand. The removed toggles (`/jev xhigh on`) are named
     // and pointed at their replacement rather than silently read as status.
@@ -2105,6 +2193,8 @@ export function register(on: On) {
     }
     byTurn.set(e.turnId, attempt);
     trimByTurn(e.turnId);
+    const ledgered = ledgerNew(attempt, e.turnId);
+    if (ledgered) await writeLedger($, ledgered);
 
     // The line goes into the reply's own text, in turn.step below. Render
     // hooks and $.ui.log both drew nothing in the desktop app; the model's
@@ -2440,6 +2530,8 @@ export function register(on: On) {
             // either double-subtracted a step already billed or dropped an
             // entire turn from the total. See addUsage's own note.
             spent += addUsage(attempt, usage, settings.ttl);
+            const used = ledgerUsed(attempt);
+            if (used) await writeLedger($, used);
           } else {
             // A step whose turn.start this copy never saw still cost money.
             spent += usageCost(usage.model, usage, settings.ttl) ?? 0;
@@ -2567,6 +2659,8 @@ export function register(on: On) {
       if (unbilled !== null && unbilled.kind === "stop" && unbilled.usage) {
         const usage = normalUsage(unbilled.usage);
         spent += attempt ? addUsage(attempt, usage, settings.ttl) : (usageCost(usage.model, usage, settings.ttl) ?? 0);
+        const used = attempt ? ledgerUsed(attempt) : null;
+        if (used) await writeLedger($, used);
         if (snapshotKey && settings && !inert) await saveSnapshot($, snapshotKey, stateToSave(), firstSave());
       }
     }
@@ -2631,6 +2725,8 @@ export function register(on: On) {
     // Recorded once it started: a spawn another hook denied ran nowhere,
     // and is not an agent of the reply.
     if (started.agentId !== undefined) record(attempt);
+    const spawnLedgered = started.agentId !== undefined ? ledgerNew(attempt, `agent:${started.agentId}`) : null;
+    if (spawnLedgered) await writeLedger($, spawnLedgered);
     if (started.agentId !== undefined) {
       // Prefer dropping finished agents over FIFO: blind eviction silently
       // dropped effort routing for resumed agents. Always keep the id we

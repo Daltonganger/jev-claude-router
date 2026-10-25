@@ -19,6 +19,15 @@
   asking. A slow first provider no longer spends the others' time and leaves
   the turn unrouted. `JEV_ROUTER_PARALLEL=0` asks them one after another, as
   before. `/jev` says which.
+- **A ledger of routed turns** in the plugin store (30 days, at most 1,500
+  turns; the first 200 characters of each prompt, what Jev named, what ran, the
+  decision time, tokens and cost). `JEV_ROUTER_LEDGER=0` keeps none.
+- **`/jev stats [24h|7d|30d]`**: turns per tier, who decided and how fast,
+  unrouted turns and why, spend against the same tokens on always-sonnet and
+  always-opus, and your verdicts.
+- **`/jev right` and `/jev wrong <tier>`** label the last routed turn, and
+  `npm run bench:ledger` writes the labelled turns as a test set for
+  `bench:run`, with the whole prompt found again in the session's transcript.
 
 ### Fixes
 

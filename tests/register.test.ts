@@ -5930,3 +5930,80 @@ describe("register: a bar for each decision model (2026-10-21)", () => {
     assert.doesNotMatch(await report(kit), /bars\s/);
   });
 });
+
+describe("register: the ledger, verdicts and /jev stats (2026-10-25)", () => {
+  const started = async (over: Record<string, string | undefined> = {}) => {
+    const kit = load({ AI_GATEWAY_API_KEY: "gw-key", JEV_ROUTER_STICKY: "1", ...over });
+    await kit.hooks.get("session.start")!(kit.$, {}, async (e: unknown) => e);
+    return kit;
+  };
+  type Kit = Awaited<ReturnType<typeof started>>;
+  const jev = async (kit: Kit, args: string) =>
+    (await kit.hooks.get('command.run:{"command":"jev"}')!(kit.$, { args })).text as string;
+  async function turn(kit: Kit, id: string, text = "implement it") {
+    await kit.hooks.get("turn.start")!(kit.$, { text, turnId: id }, async (e: unknown) => e);
+    await collect(kit.hooks.get("turn.step")!(kit.$, { turnId: id, index: 0 }, (e: { model: string }) => answeredBy(e.model ?? "claude-opus-5-5")));
+  }
+  const ledger = async (kit: Kit) => {
+    const store = (kit.$ as unknown as { store: { keys: () => Promise<string[]>; get: (k: string) => Promise<unknown> } }).store;
+    const out: Record<string, unknown>[] = [];
+    for (const k of (await store.keys()).filter((k) => k.startsWith("ledger:"))) out.push(...((await store.get(k)) as Record<string, unknown>[]));
+    return out;
+  };
+
+  test("a routed turn is kept with what Jev named, its tokens and its cost", async () => {
+    const kit = await started();
+    kit.setTier("opus", 0.95, 2);
+    await turn(kit, "g1", "refactor the parser");
+    const [e] = await ledger(kit);
+    assert.equal(e?.id, "g1");
+    assert.equal(e?.prompt, "refactor the parser");
+    assert.equal(e?.session, "sess-1");
+    assert.equal(e?.jev, "opus");
+    assert.equal(e?.tier, "opus");
+    assert.equal(e?.decider, "Jev");
+    assert.deepEqual(e?.tokens, { in: 1000, out: 3000, read: 9000, write: 0 });
+    assert.equal(typeof e?.cost, "number");
+  });
+
+  test("/jev right and /jev wrong label the last routed turn", async () => {
+    const kit = await started();
+    kit.setTier("opus", 0.95, 2);
+    await turn(kit, "g2", "rename foo to bar");
+    assert.match(await jev(kit, "wrong haiku"), /Labelled "rename foo to bar" haiku: Jev said opus\./);
+    assert.equal((await ledger(kit))[0]?.label, "haiku");
+    assert.match(await jev(kit, "right"), /and you agree/);
+    assert.equal((await ledger(kit))[0]?.label, "opus");
+    assert.match(await jev(kit, "wrong medium"), /Say which tier it should have run on/);
+  });
+
+  test("/jev stats counts the window, verdicts included", async () => {
+    const kit = await started();
+    kit.setTier("opus", 0.95, 2);
+    await turn(kit, "g3");
+    await turn(kit, "g4");
+    await jev(kit, "right");
+    const text = await jev(kit, "stats");
+    assert.match(text, /Last 7 days:/);
+    assert.match(text, /turns\s+2 — opus 2 \(100%\)/);
+    assert.match(text, /decided\s+2 by Jev 2/);
+    assert.match(text, /spent\s+\$[\d.]+ at list price; the same tokens on always sonnet/);
+    assert.match(text, /verdicts\s+1 labelled: 100% right/);
+    assert.match(await jev(kit, "stats 24h"), /Last 24 hours:/);
+    assert.match(await jev(kit, "stats forever"), /is not a window/);
+  });
+
+  test("JEV_ROUTER_LEDGER=0 keeps nothing and says so", async () => {
+    const kit = await started({ JEV_ROUTER_LEDGER: "0" });
+    kit.setTier("opus", 0.95, 2);
+    await turn(kit, "g5");
+    assert.deepEqual(await ledger(kit), []);
+    assert.match(await jev(kit, "stats"), /The ledger is off/);
+    assert.match(await jev(kit, "right"), /The ledger is off/);
+  });
+
+  test("the help names the new commands", async () => {
+    const kit = await started();
+    assert.match(await jev(kit, "nonsense"), /stats \[24h\|7d\|30d\], right, wrong <tier>/);
+  });
+});

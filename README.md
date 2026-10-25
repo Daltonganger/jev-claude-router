@@ -88,7 +88,10 @@ Vercel AI Gateway), and nowhere else:
 
 On disk, in Claude Code's plugin store, the router keeps each session's
 routing history, including the first 400 characters of each prompt, for the
-last 20 sessions.
+last 20 sessions. It also keeps a ledger of routed turns for `/jev stats` and
+your verdicts: per turn the first 200 characters of the prompt, the session id,
+the tier Jev named and the one that ran, the decision time, tokens and cost,
+for 30 days and at most 1,500 turns. `JEV_ROUTER_LEDGER=0` keeps none.
 
 ## Quick start
 
@@ -430,6 +433,9 @@ is left alone.
 | `/jev tiers off fable` | Drop one or more tiers from the question entirely. |
 | `/jev tiers on fable` | Bring a dropped tier back. |
 | `/jev compact`, `/jev compact on`, `/jev compact off` | Show or toggle compaction by Jev. |
+| `/jev stats`, `/jev stats 24h`, `/jev stats 30d` | How routing went over a window (7 days by default), from the ledger: turns per tier, who decided and how fast, unrouted turns and why, spend against the same tokens on always-sonnet and always-opus, and your verdicts. |
+| `/jev right` | Agree with the tier Jev named on the last routed turn. |
+| `/jev wrong opus` | Say the last routed turn should have run on another tier. Verdicts collect into a test set: `npm run bench:ledger`. |
 
 A command overrides the matching setting below for the rest of the session,
 and is kept across reloads.
@@ -460,6 +466,7 @@ All settings go in the `env` block of `~/.claude/settings.json`.
 | `JEV_ROUTER_TIMEOUT_MS` | `1500` | How long a turn waits for Jev, in milliseconds. At least 100 (anything less is taken for a mistake and the default used), at most 8000. |
 | `JEV_ROUTER_PARALLEL` | on | With several providers in `JEV_ROUTER_PROVIDER`, ask them all at once, each with the whole budget, and take the first in list order that answers. A slow first provider then no longer spends the others' time and leaves the turn unrouted. Each provider asked is billed for its question (about $0.00003). `0` asks them one after another, the next only when one fails at once, sharing one budget, as before. |
 | `JEV_ROUTER_PREFER_MS` | `300` | How long an answer from a later provider waits for an earlier one still asking, before it is taken: the list is a preference, not only a fallback. `0` takes whichever answers first. |
+| `JEV_ROUTER_LEDGER` | on | Keep a record of each routed turn in the plugin store (30 days, at most 1,500 turns) for `/jev stats` and `/jev right`/`wrong`. `0` keeps none. |
 
 **Laya, and a fallback.** Laya is a Jev-compatible model you run yourself. Its own
 `confidence` is a different quantity from Jev's (one minus the normalised entropy), so
@@ -571,6 +578,7 @@ npm run try-prompts            # Jev's tier, effort and confidence on sample pro
 npm run try-prompts -- "text"  # the same for one prompt
 npm run measure-switch-cost    # what a switch costs at each context size
 npm run bench-overhead         # engine calls and plugin time per turn, with a fake engine
+npm run bench:ledger           # your /jev right and /jev wrong verdicts as a test set (cases-ledger.jsonl)
 ```
 
 `try-prompts` is the tuning loop: edit `TIER_CRITERIA`, run it, check the

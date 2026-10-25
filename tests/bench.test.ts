@@ -17,6 +17,7 @@ import { agreement, barTable, baselines, betterThanRest, normalSf, combine, comp
 import { seeded, typedPrompt } from "../scripts/bench/extract.mjs";
 // @ts-expect-error plain JavaScript modules
 import { merge } from "../scripts/bench/report.mjs";
+import { ledgerEntries, wholePrompt } from "../scripts/bench/ledger.mjs";
 // @ts-expect-error plain JavaScript modules
 import { barsReport, checkBar, pool } from "../scripts/bench/bars.mjs";
 // @ts-expect-error plain JavaScript modules
@@ -708,3 +709,46 @@ describe("run, against a stand-in for the Decisions API", () => {
   });
 });
 
+
+
+describe("bench:ledger: verdicts from the ledger as a test set", () => {
+  const typed = (text: string) => JSON.stringify({ type: "user", message: { content: text } });
+
+  test("records are read from a store file, top level or one down", () => {
+    const rec = { id: "t1", at: 1, prompt: "p", jev: "opus" };
+    assert.equal(ledgerEntries({ "ledger:2026-10-25": [rec], "session:x": {} }).length, 1);
+    assert.equal(ledgerEntries({ data: { "ledger:2026-10-25": [rec, { nope: 1 }] } }).length, 1);
+    assert.deepEqual(ledgerEntries({}), []);
+  });
+
+  test("the whole prompt is found again by its first 200 characters", () => {
+    const long = `refactor the parser so that ${"x".repeat(400)}`;
+    const lines = [typed("something else"), typed(long)];
+    assert.equal(wholePrompt(long.slice(0, 200), lines), long);
+    assert.equal(wholePrompt("not there", lines), null);
+  });
+
+  test("the script writes labelled turns, with the whole prompt where the transcript has it", async () => {
+    const { spawnSync } = await import("node:child_process");
+    const dir = mkdtempSync(join(tmpdir(), "ledger-"));
+    const long = `plan the migration from MySQL to Postgres and ${"y".repeat(300)}`;
+    writeFileSync(join(dir, "store.json"), JSON.stringify({
+      "ledger:2026-10-25": [
+        { id: "a", at: 2, session: "s1", prompt: long.slice(0, 200), jev: "opus", decider: "Jev", label: "fable" },
+        { id: "b", at: 1, session: "gone", prompt: "rename foo", jev: "haiku", decider: "d3-turbo", label: "haiku" },
+        { id: "c", at: 3, prompt: "unlabelled", jev: "sonnet" },
+        { id: "d", at: 4, prompt: "unrouted", skipped: "timed out" },
+      ],
+    }));
+    writeFileSync(join(dir, "s1.jsonl"), typed(long) + "\n");
+    const out = join(dir, "out.jsonl");
+    const r = spawnSync(process.execPath, ["--experimental-strip-types", "scripts/bench/ledger.mjs", "--store", join(dir, "store.json"), "--dir", dir, "--out", out], { encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+    const rows = readFileSync(out, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    assert.deepEqual(rows.map((x) => [x.prompt.length > 200, x.tier, x.jev, x.decider]), [[false, "haiku", "haiku", "d3-turbo"], [true, "fable", "opus", "Jev"]]);
+    assert.match(r.stdout, /2 turns written .* \(2 labelled, 1 with the whole prompt from the transcript\)/);
+    const all = spawnSync(process.execPath, ["--experimental-strip-types", "scripts/bench/ledger.mjs", "--store", join(dir, "store.json"), "--dir", dir, "--out", out, "--all"], { encoding: "utf8" });
+    assert.equal(all.status, 0, all.stderr);
+    assert.equal(readFileSync(out, "utf8").trim().split("\n").length, 3, "the unlabelled routed turn joins with tier null; the unrouted one never");
+  });
+});

@@ -1724,7 +1724,7 @@ export class ImitationFilter<C extends { kind: "text"; index: number; text: stri
  */
 export function unknownCommandReply(arg: string, legacy: boolean): string {
   const usage =
-    "/jev (status), on, off, quiet, loud, sticky [off|0.6], price [on|off], " +
+    "/jev (status), stats [24h|7d|30d], right, wrong <tier>, on, off, quiet, loud, sticky [off|0.6], price [on|off], " +
     "compact [on|off], tiers [on|off <tier>], ceiling <effort> [tiers], " +
     "or an effort on its own (/jev xhigh fable).";
   return legacy

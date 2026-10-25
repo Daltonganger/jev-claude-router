@@ -51,6 +51,8 @@ function load(
   let modelsKeySent: string | undefined;
   /** Every routing request: where it went, and the authorization it carried. */
   const asked: { url: string; authorization: string | undefined }[] = [];
+  /** Each question's body as sent, for what it asked (wording, model). */
+  const bodies: Record<string, unknown>[] = [];
   /** Hosts whose routing requests fail with an HTTP error. */
   const failingHosts = new Set<string>();
 
@@ -91,6 +93,7 @@ function load(
         }
         fetches++;
         asked.push({ url, authorization: init?.headers?.authorization });
+        if (init?.body) bodies.push(JSON.parse(init.body));
         lastState = init?.body ? JSON.parse(init.body).state : undefined;
         const good = ok && ![...failingHosts].some((h) => url.includes(h));
         ok = true;
@@ -193,6 +196,7 @@ function load(
     modelsFetches: () => modelsFetches,
     /** The routing requests so far, in order. */
     asked: () => asked,
+    bodies: () => bodies,
     /** Makes every routing request to a URL containing `host` fail. */
     failHost: (host: string) => void failingHosts.add(host),
     modelsKeySent: () => modelsKeySent,
@@ -6005,5 +6009,42 @@ describe("register: the ledger, verdicts and /jev stats (2026-10-25)", () => {
   test("the help names the new commands", async () => {
     const kit = await started();
     assert.match(await jev(kit, "nonsense"), /stats \[24h\|7d\|30d\], right, wrong <tier>/);
+  });
+});
+
+
+describe("register: wording per decision model (2026-10-25)", () => {
+  const started = async (over: Record<string, string | undefined> = {}) => {
+    const kit = load({ JEV_ROUTER_STICKY: "1", JEV_ROUTER_PROVIDER: "openrouter", OPENROUTER_API_KEY: "or-key", ...over });
+    await kit.hooks.get("session.start")!(kit.$, {}, async (e: unknown) => e);
+    return kit;
+  };
+  type Kit = Awaited<ReturnType<typeof started>>;
+  const report = async (kit: Kit) => (await kit.hooks.get('command.run:{"command":"jev"}')!(kit.$, { args: "" })).text as string;
+  const ask = async (kit: Kit, id: string) => {
+    await kit.hooks.get("turn.start")!(kit.$, { text: "add a null check", turnId: id }, async (e: unknown) => e);
+    return kit.bodies().at(-1) as { questions: { tier: { criteria: Record<string, string>; instructions: string } } };
+  };
+
+  test("a model given its own wording is asked with it, and /jev says so", async () => {
+    const kit = await started({ JEV_ROUTER_JEV_MODEL: "microsoft/microsoft-decision-1", JEV_ROUTER_WORDING: "microsoft-decision-1=sonnet-wider" });
+    const body = await ask(kit, "w1");
+    assert.match(body.questions.tier.criteria.sonnet!, /^A contained change to existing code/);
+    assert.match(body.questions.tier.criteria.fable!, /^High complexity/, "a tier the wording leaves out keeps the router's text");
+    assert.match(await report(kit), /wording\s+microsoft\/microsoft-decision-1 asked with sonnet-wider/);
+  });
+
+  test("any other model keeps the router's wording", async () => {
+    const kit = await started({ JEV_ROUTER_WORDING: "microsoft-decision-1=sonnet-wider" });
+    const body = await ask(kit, "w2");
+    assert.match(body.questions.tier.criteria.sonnet!, /^Straightforward and minor/);
+    assert.doesNotMatch(await report(kit), /asked with/);
+  });
+
+  test("a name no wording has is said, and the router's own is used", async () => {
+    const kit = await started({ JEV_ROUTER_WORDING: "openrouter=bolder" });
+    const body = await ask(kit, "w3");
+    assert.match(body.questions.tier.criteria.sonnet!, /^Straightforward and minor/);
+    assert.match(await report(kit), /wording\s+unknown: bolder \(in neither the plugin nor the catalog/);
   });
 });

@@ -28,6 +28,12 @@
 - **`/jev right` and `/jev wrong <tier>`** label the last routed turn, and
   `npm run bench:ledger` writes the labelled turns as a test set for
   `bench:run`, with the whole prompt found again in the session's transcript.
+- **Wording per decision model** (`JEV_ROUTER_WORDING`,
+  `microsoft-decision-1=sonnet-wider`): a model can be asked with other tier
+  descriptions than the router's own, as `scripts/bench` measures them.
+  `sonnet-wider` ships with the plugin; the catalog can add wordings and assign
+  them (`wordings`, `deciderWordings`). None is assigned by default. `/jev`
+  shows which model is asked with which.
 
 ### Fixes
 

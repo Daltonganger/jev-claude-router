@@ -298,7 +298,7 @@ export async function askJev(args: AskArgs): Promise<JevResult> {
   });
 
   const body = {
-    ...requestBodyOf(stateOf(state), offered, args.source),
+    ...requestBodyOf(stateOf(state), offered, args.source, provider.wording),
     model: provider.model,
   };
 

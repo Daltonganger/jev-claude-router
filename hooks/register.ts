@@ -11,6 +11,7 @@ import {
   type StateSource,
 } from "./jev.ts";
 import { labelOf, withLabel } from "./label.ts";
+import { assignmentsOf, BUILTIN_WORDINGS, unknownNames, wordingFor } from "./wording.ts";
 import {
   dayKey,
   entryOf,
@@ -395,6 +396,8 @@ type Settings = {
   preferMs: number;
   /** A record of each routed turn is kept in the store, for `/jev stats` and verdicts. */
   ledger: boolean;
+  /** Wording names assigned that neither the plugin nor the catalog has. */
+  unknownWordings: readonly string[];
   offered: readonly Tier[];
   excluded: readonly Tier[];
   sticky: number | null;
@@ -591,9 +594,20 @@ async function seedSettings(
     VLLM_SR_API_KEY: await $.env.get("VLLM_SR_API_KEY"),
     VLLM_SR_MODEL: await $.env.get("VLLM_SR_MODEL"),
   });
+  // Each route's model with its own wording of the tier question, when it has
+  // one: the catalog's assignments, then yours, which win for the same key.
+  const available = { ...BUILTIN_WORDINGS, ...(catalog?.wordings ?? {}) };
+  const assigned = { ...(catalog?.deciderWordings ?? {}), ...assignmentsOf(await $.env.get("JEV_ROUTER_WORDING")) };
+  const worded: ProviderOk[] = routes.ok
+    ? routes.providers.map((p) => {
+        const found = wordingFor(assigned, available, p.name, p.model);
+        return found ? { ...p, wording: found.wording, wordingName: found.name } : p;
+      })
+    : [];
   return {
-    provider: routes.ok ? routes.providers[0]! : routes,
-    providers: routes.ok ? routes.providers : [],
+    provider: routes.ok ? worded[0]! : routes,
+    providers: worded,
+    unknownWordings: unknownNames(assigned, available),
     timeoutMs: timeoutOf(await $.env.get("JEV_ROUTER_TIMEOUT_MS")),
     parallel: !flagOff(await $.env.get("JEV_ROUTER_PARALLEL")),
     preferMs: preferOf(await $.env.get("JEV_ROUTER_PREFER_MS")),
@@ -1904,6 +1918,8 @@ export function register(on: On) {
         providers: settings.providers.map((p) => p.name),
         parallel: settings.parallel,
         preferMs: settings.preferMs,
+        wordings: settings.providers.filter((p) => p.wordingName).map((p) => `${p.model} asked with ${p.wordingName}`),
+        unknownWordings: settings.unknownWordings,
         timeoutMs: settings.timeoutMs,
         sticky: settings.sticky,
         ...(overridden.has("sticky") ? {} : { bars: settings.bars }),

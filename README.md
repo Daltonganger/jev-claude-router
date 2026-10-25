@@ -516,6 +516,7 @@ flattered by them, so choose on one set and confirm on another that shares nothi
 | `JEV_ROUTER_STICKY` | on | `0` removes the confidence bar. |
 | `JEV_ROUTER_STICKY_CONFIDENCE` | `0.75` | The confidence bar: `0.6`, `60` or `60%`. |
 | `JEV_ROUTER_DECIDER_BARS` | | A bar for particular decision models, in place of the one above: `microsoft-decision-1=0.5,laya=60%`. A key is a full model id, the id after its `/`, or a route name. For a model whose confidence is not Jev's (`bench:bars` shows where one would help), and `catalog.json` can recommend one for everyone (`bars`). A bar you set for every decider yourself keeps the catalog's out; one you name for a model is always yours; `/jev sticky` overrides all. |
+| `JEV_ROUTER_WORDING` | | Other wording of the tier question for particular decision models: `microsoft-decision-1=sonnet-wider`. A key is a full model id, the id after its `/`, or a route name, as for the bars; a name is `sonnet-wider` (shipped, from `scripts/bench/criteria/`) or one the catalog adds (`wordings`, and `deciderWordings` to assign them for everyone). Yours win over the catalog's for the same key. A bar measured with one wording does not hold for another, so set the model's bar with it. `/jev` shows which model is asked with which. |
 | `JEV_ROUTER_PRICE_CHECK` | on | `0` turns both price checks off. |
 | `JEV_ROUTER_UPGRADE_MAX` | `1` | Dollars an upgrade may cost over staying (a plain number, `$` allowed), or `off`. |
 | `JEV_ROUTER_CACHE_TTL` | `1h` | Cache lifetime used for pricing: `1h` (what Claude Code writes) or `5m`. |

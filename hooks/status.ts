@@ -495,6 +495,10 @@ export type Status = {
   provider: ProviderResult;
   /** Every provider, in the order they are tried; absent on older callers. */
   providers?: readonly string[];
+  /** Routes whose model is asked with other wording of the tier question, as "<model> asked with <name>". */
+  wordings?: readonly string[];
+  /** Wording names assigned that no wording has. */
+  unknownWordings?: readonly string[];
   /** The providers are asked at once (the first named preferred, waiting `preferMs`); absent or false: one after another. */
   parallel?: boolean;
   preferMs?: number;
@@ -1212,6 +1216,9 @@ export function statusReport(status: Status): string {
     lines.push(`  provider  NOT SET UP — ${words(status.provider.reason)}; nothing will route`);
   }
 
+  for (const w of status.wordings ?? []) lines.push(`  wording   ${w}`);
+  if (status.unknownWordings?.length)
+    lines.push(`  wording   unknown: ${status.unknownWordings.join(", ")} (in neither the plugin nor the catalog; the router's own is used)`);
   lines.push(`  budget    ${status.timeoutMs}ms`);
   lines.push(
     `  sticky    ${

@@ -14,6 +14,7 @@
  * in as arguments.
  */
 
+import { wordingOf, type Wording } from "./wording.ts";
 import { fetchText } from "./fetchtext.ts";
 import type { HttpInitLike, HttpResponseLike } from "./jev.ts";
 import { MODEL_OF, TIERS } from "./policy.ts";
@@ -76,6 +77,10 @@ export type Catalog = {
   deciders: Record<string, CatalogDecider>;
   /** Confidence bars by decision model, as `barsOf` keys them: for the models whose confidence is not Jev's. */
   bars: Record<string, number>;
+  /** Named wordings of the tier question, beside the plugin's own (see wording.ts). */
+  wordings: Record<string, Wording>;
+  /** Which decision model is asked with which wording, keyed as the bars are. */
+  deciderWordings: Record<string, string>;
 };
 
 export type ParseResult =
@@ -205,8 +210,20 @@ export function parseCatalog(raw: unknown): ParseResult {
     else dropped.push(`bar ${key.slice(0, 60)}`);
   }
 
+  const wordings: Record<string, Wording> = {};
+  for (const [name, entry] of Object.entries(isRecord(raw.wordings) ? raw.wordings : {})) {
+    const wording = WORD.test(name) ? wordingOf(entry) : null;
+    if (wording === null) dropped.push(`wording ${name.slice(0, 60)}`);
+    else wordings[name] = wording;
+  }
+  const deciderWordings: Record<string, string> = {};
+  for (const [key, name] of Object.entries(isRecord(raw.deciderWordings) ? raw.deciderWordings : {})) {
+    if (/^[\w.:@/-]{1,100}$/.test(key) && typeof name === "string" && WORD.test(name)) deciderWordings[key.toLowerCase()] = name;
+    else dropped.push(`decider wording ${key.slice(0, 60)}`);
+  }
+
   const updated = typeof raw.updated === "string" ? raw.updated.slice(0, 32) : "";
-  return { ok: true, catalog: { schema: raw.schema, updated, models, plans, deciders, bars }, dropped };
+  return { ok: true, catalog: { schema: raw.schema, updated, models, plans, deciders, bars, wordings, deciderWordings }, dropped };
 }
 
 /**

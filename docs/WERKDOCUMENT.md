@@ -499,6 +499,11 @@ Microsoft (eigen tekst van de router) goed van fout scheidt, dus `bars` in `cata
   ingebouwde tekst); kostenindex t.o.v. de labels 1,25 met `sonnet-wider` tegen 1,14 ingebouwd; ECE slechter (0,252
   tegen 0,174). De balk zegt dus wanneer het model zeker is, niet dat het vaker gelijk heeft. Nog niet bepaald: of
   het in een echte sessie (reeks beurten met stickiness en prijscontrole) iets oplevert; dat meet deze toets niet.
+- **Te gebruiken in de router (2026-10-25).** De tekst per beslismodel is nu instelbaar: Microsoft met
+  `sonnet-wider` en balk 0,85 is `JEV_ROUTER_API=decisions JEV_ROUTER_JEV_MODEL=microsoft/microsoft-decision-1
+  JEV_ROUTER_WORDING=microsoft-decision-1=sonnet-wider JEV_ROUTER_DECIDER_BARS=microsoft-decision-1=0.85`. Niet als
+  standaard in de catalogus: de toets op set C hield stand, maar de kostenindex werd slechter (1,25 tegen 1,14) en de
+  nauwkeurigheid gelijk. Wat het in echte sessies doet, laten de ledger en `/jev stats` zien.
 - Opvallend maar post hoc: Microsoft met de ruimere tierbeschrijving (`sonnet-wider`) heeft wel een scheiding: bij
   een balk van 85% is 64% van de antwoorden goed (55% van alle), tegen 39% eronder (p ≈ 0,001; bij 90%: 65% tegen
   43%, p ≈ 0,003). Dit is gevonden door 40 combinaties van model, tekst en balk te bekijken, dus het geldt pas als

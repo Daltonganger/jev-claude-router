@@ -10,6 +10,12 @@
 
 ## Unreleased
 
+### Fixes
+
+- The vllm route defaults to `vllm-sr/d3-ultra` instead of `vllm-sr/d3-turbo`:
+  vLLM Semantic Router serves `vllm-sr/d3-turbo` as `vllm-sr/d3-ultra` (same answers, the response names d3-ultra) and the key's quota lists only d3-ultra. `d3-ultra` and `d3-turbo` both name the route in
+  `JEV_ROUTER_PROVIDER`; `VLLM_SR_MODEL` still picks another.
+
 ### Features
 
 - **Several decision models are asked at once.** With a list in

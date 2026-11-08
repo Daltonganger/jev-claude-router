@@ -453,8 +453,8 @@ All settings go in the `env` block of `~/.claude/settings.json`.
 | `AI_GATEWAY_API_KEY` | | Vercel AI Gateway key. |
 | `OPENROUTER_API_KEY` | | OpenRouter key, for `JEV_ROUTER_PROVIDER=openrouter` (Jev 1.14, `https://openrouter.ai/api/v1/systemone`). |
 | `COMMANDCODE_API_KEY` | | Command Code key, for `JEV_ROUTER_PROVIDER=commandcode` (the Provider API; GOAT plan and above). |
-| `VLLM_SR_API_KEY` | | vLLM Semantic Router key, for `JEV_ROUTER_PROVIDER=vllm` (`https://decision.vllm-sr.ai/v1/systemone`, model `vllm-sr/d3-turbo`). With no `JEV_ROUTER_PROVIDER` this key alone chooses it. For vLLM first and Jev on OpenRouter as the backup: `JEV_ROUTER_PROVIDER=vllm,openrouter`. Not Jev: its answers are read for their probabilities, and the route line names it (`d3-turbo 91%`). Not benchmarked here yet. |
-| `VLLM_SR_MODEL` | `vllm-sr/d3-turbo` | The model on that route. Use this rather than `JEV_ROUTER_JEV_MODEL`, which is Jev's id and would reach every route in a list. |
+| `VLLM_SR_API_KEY` | | vLLM Semantic Router key, for `JEV_ROUTER_PROVIDER=vllm` (`https://decision.vllm-sr.ai/v1/systemone`, model `vllm-sr/d3-ultra`). With no `JEV_ROUTER_PROVIDER` this key alone chooses it. For vLLM first and Jev on OpenRouter as the backup: `JEV_ROUTER_PROVIDER=vllm,openrouter`. Not Jev: its answers are read for their probabilities, and the route line names it (`d3-ultra 91%`). Not benchmarked here yet. |
+| `VLLM_SR_MODEL` | `vllm-sr/d3-ultra` | The model on that route. Use this rather than `JEV_ROUTER_JEV_MODEL`, which is Jev's id and would reach every route in a list. |
 | `OPENCODE_API_KEY` | | OpenCode Console key, for `JEV_ROUTER_PROVIDER=opencode`. Also set `JEV_ROUTER_JEV_MODEL`: the router does not know OpenCode's id for Jev. |
 | `JEV_ROUTER_API` | `systemone` | `decisions` makes the `openrouter` route use OpenRouter's Decisions API (`/api/alpha/decisions`) instead of its System One endpoint. Same questions and answers, and it also serves the other decision models in OpenRouter's catalog: name one in `JEV_ROUTER_JEV_MODEL` (`npm run bench:run -- --catalog` lists them). A model that is not Jev is read for its probabilities only, and named on the route line (`pplx-decider-v1.2 96%`). The API is alpha. |
 | `LAYA_BASE_URL` | | Your own Laya server, e.g. `https://nas.lan:8443`. https only, any host, no login in the URL; a trailing `/v1/systemone` is dropped. Setting it alone makes Laya the provider. |
@@ -489,7 +489,7 @@ own prompts: `npm run bench:extract` pulls the prompts you typed out of Claude C
 transcripts (locally, into `cases.jsonl`, which is git-ignored), `npm run bench:label`
 asks you for the tier each needs (1 haiku … 4 fable), and
 `OPENROUTER_API_KEY=… npm run bench:run -- --cases cases.jsonl --tiers haiku,sonnet,opus --models typesafe/jev-1.14,perplexity/pplx-decider-v1.2`
-vLLM Semantic Router is a route of its own: `vllm:vllm-sr/d3-turbo` in `--models`, with
+vLLM Semantic Router is a route of its own: `vllm:vllm-sr/d3-ultra` in `--models`, with
 `VLLM_SR_API_KEY` set, read for its probabilities as the router reads it.
 (add `laya:<model>`, e.g. `laya:multilingual`, to ask your own Laya server too: its address is `LAYA_BASE_URL`, its key `LAYA_API_KEY`, and `--laya-catalog` lists its models)
 asks each model the router's own questions (`--tiers` limits the tiers on offer to the ones you really have: with Fable off, leave it out, or the models are asked to pick a tier you would never get) and prints, per model: how often it picks

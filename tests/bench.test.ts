@@ -743,7 +743,7 @@ describe("bench:ledger: verdicts from the ledger as a test set", () => {
     writeFileSync(join(dir, "store.json"), JSON.stringify({
       "ledger:2026-10-25": [
         { id: "a", at: 2, session: "s1", prompt: long.slice(0, 200), jev: "opus", decider: "Jev", label: "fable" },
-        { id: "b", at: 1, session: "gone", prompt: "rename foo", jev: "haiku", decider: "d3-turbo", label: "haiku" },
+        { id: "b", at: 1, session: "gone", prompt: "rename foo", jev: "haiku", decider: "d3-ultra", label: "haiku" },
         { id: "c", at: 3, prompt: "unlabelled", jev: "sonnet" },
         { id: "d", at: 4, prompt: "unrouted", skipped: "timed out" },
       ],
@@ -753,7 +753,7 @@ describe("bench:ledger: verdicts from the ledger as a test set", () => {
     const r = spawnSync(process.execPath, ["--experimental-strip-types", "scripts/bench/ledger.mjs", "--store", join(dir, "store.json"), "--dir", dir, "--out", out], { encoding: "utf8" });
     assert.equal(r.status, 0, r.stderr);
     const rows = readFileSync(out, "utf8").trim().split("\n").map((l) => JSON.parse(l));
-    assert.deepEqual(rows.map((x) => [x.prompt.length > 200, x.tier, x.jev, x.decider]), [[false, "haiku", "haiku", "d3-turbo"], [true, "fable", "opus", "Jev"]]);
+    assert.deepEqual(rows.map((x) => [x.prompt.length > 200, x.tier, x.jev, x.decider]), [[false, "haiku", "haiku", "d3-ultra"], [true, "fable", "opus", "Jev"]]);
     assert.match(r.stdout, /2 turns written .* \(2 labelled, 1 with the whole prompt from the transcript\)/);
     const all = spawnSync(process.execPath, ["--experimental-strip-types", "scripts/bench/ledger.mjs", "--store", join(dir, "store.json"), "--dir", dir, "--out", out, "--all"], { encoding: "utf8" });
     assert.equal(all.status, 0, all.stderr);
@@ -788,7 +788,7 @@ describe("bench:ledger: verdicts from the ledger as a test set", () => {
 
 describe("bench:run asks vLLM Semantic Router too", () => {
   test("vllm:<model> is a route of its own", () => {
-    assert.deepEqual(specOf("vllm:vllm-sr/d3-turbo"), { route: "vllm", model: "vllm-sr/d3-turbo" });
+    assert.deepEqual(specOf("vllm:vllm-sr/d3-ultra"), { route: "vllm", model: "vllm-sr/d3-ultra" });
     assert.deepEqual(specOf("laya:multilingual"), { route: "laya", model: "multilingual" });
     assert.deepEqual(specOf("typesafe/jev-1.14"), { route: "openrouter", model: "typesafe/jev-1.14" });
   });
@@ -800,9 +800,9 @@ describe("bench:run asks vLLM Semantic Router too", () => {
       seen.push({ url, auth: init.headers.authorization });
       return new Response(JSON.stringify({ answers }), { status: 200 });
     };
-    const r = await run({ cases: [{ id: 1, prompt: "refactor it", tier: "opus" }], models: ["vllm:vllm-sr/d3-turbo"], base: "https://openrouter.ai", api: "decisions", key: "or", vllmKey: "v-key", fetchImpl, confidence: "router" });
+    const r = await run({ cases: [{ id: 1, prompt: "refactor it", tier: "opus" }], models: ["vllm:vllm-sr/d3-ultra"], base: "https://openrouter.ai", api: "decisions", key: "or", vllmKey: "v-key", fetchImpl, confidence: "router" });
     assert.deepEqual(seen, [{ url: "https://decision.vllm-sr.ai/v1/systemone", auth: "Bearer v-key" }]);
-    const row = r.rows["vllm:vllm-sr/d3-turbo"]![0];
+    const row = r.rows["vllm:vllm-sr/d3-ultra"]![0];
     assert.equal(row.pick, "opus");
     assert.ok(Math.abs(row.confidence - 0.6) < 1e-9, "its own 0.99 is not read: the probabilities are");
   });

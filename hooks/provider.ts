@@ -130,7 +130,7 @@ const FIXED: Record<"openrouter" | "commandcode" | "opencode" | "vllm", { endpoi
   // OpenCode Console endpoint; its model id for Jev 1.14 is not confirmed.
   opencode: { endpoint: "https://opencode.ai/inference/systemone/v1/systemone", model: null, keyEnv: "OPENCODE_API_KEY" },
   // vLLM Semantic Router's decision endpoint (System One shape). Not Jev: its answers are read for probabilities.
-  vllm: { endpoint: "https://decision.vllm-sr.ai/v1/systemone", model: "vllm-sr/d3-turbo", keyEnv: "VLLM_SR_API_KEY" },
+  vllm: { endpoint: "https://decision.vllm-sr.ai/v1/systemone", model: "vllm-sr/d3-ultra", keyEnv: "VLLM_SR_API_KEY" },
 };
 
 /**
@@ -298,6 +298,8 @@ const NAMES: Record<string, RouteName> = {
   laya: "laya",
   vllm: "vllm",
   "vllm-sr": "vllm",
+  "d3-ultra": "vllm",
+  "d3-turbo": "vllm",
   semantic: "vllm",
 };
 

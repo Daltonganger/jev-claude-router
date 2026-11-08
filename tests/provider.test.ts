@@ -386,28 +386,28 @@ describe("OpenRouter, Command Code and OpenCode", () => {
     });
   });
 
-  it("vLLM Semantic Router: its decision endpoint and d3-turbo, not Jev's id", () => {
+  it("vLLM Semantic Router: its decision endpoint and d3-ultra, not Jev's id", () => {
     assert.deepStrictEqual(providerOf(env({ JEV_ROUTER_PROVIDER: "vllm", VLLM_SR_API_KEY: "sk-test" })), {
       ok: true,
       name: "vllm",
       endpoint: "https://decision.vllm-sr.ai/v1/systemone",
-      model: "vllm-sr/d3-turbo",
+      model: "vllm-sr/d3-ultra",
       apiKey: "sk-test",
     });
     const pinned = providerOf(env({ JEV_ROUTER_PROVIDER: "vllm", VLLM_SR_API_KEY: "k", JEV_ROUTER_JEV_MODEL: "typesafe/jev-1.14" }));
     assert.ok(pinned.ok);
-    assert.strictEqual(pinned.model, "vllm-sr/d3-turbo", "Jev's id never reaches this route");
+    assert.strictEqual(pinned.model, "vllm-sr/d3-ultra", "Jev's id never reaches this route");
     const own = providerOf(env({ JEV_ROUTER_PROVIDER: "vllm", VLLM_SR_API_KEY: "k", VLLM_SR_MODEL: "vllm-sr/other" }));
     assert.ok(own.ok);
     assert.strictEqual(own.model, "vllm-sr/other");
-    assert.strictEqual(labelOf("vllm", "vllm-sr/d3-turbo"), "d3-turbo");
-    assert.strictEqual(confidenceSourceOf("vllm", "vllm-sr/d3-turbo"), "probabilities");
+    assert.strictEqual(labelOf("vllm", "vllm-sr/d3-ultra"), "d3-ultra");
+    assert.strictEqual(confidenceSourceOf("vllm", "vllm-sr/d3-ultra"), "probabilities");
   });
 
   it("vLLM first, OpenRouter's Jev as the backup", () => {
     const all = providersOf(env({ JEV_ROUTER_PROVIDER: "vllm,openrouter", VLLM_SR_API_KEY: "v", OPENROUTER_API_KEY: "o", JEV_ROUTER_JEV_MODEL: "typesafe/jev-1.14" }));
     assert.ok(all.ok);
-    assert.deepStrictEqual(all.providers.map((p) => [p.name, p.model]), [["vllm", "vllm-sr/d3-turbo"], ["openrouter", "typesafe/jev-1.14"]]);
+    assert.deepStrictEqual(all.providers.map((p) => [p.name, p.model]), [["vllm", "vllm-sr/d3-ultra"], ["openrouter", "typesafe/jev-1.14"]]);
   });
 
   it("the vLLM key alone chooses it, and OpenRouter's key does not join it uninvited", () => {

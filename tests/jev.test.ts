@@ -794,7 +794,7 @@ describe("askJevRace: every provider at once, the first named preferred", () => 
 });
 
 describe("askJevRace: a staggered reserve, and every provider's part (2026-10-25)", () => {
-  const vllm: ProviderOk = { ok: true, name: "vllm", endpoint: "https://decision.vllm-sr.ai/v1/systemone", model: "vllm-sr/d3-turbo", apiKey: "k1" };
+  const vllm: ProviderOk = { ok: true, name: "vllm", endpoint: "https://decision.vllm-sr.ai/v1/systemone", model: "vllm-sr/d3-ultra", apiKey: "k1" };
   const openrouter: ProviderOk = { ok: true, name: "openrouter", endpoint: "https://openrouter.ai/api/v1/systemone", model: "typesafe/jev-1.14", apiKey: "k2" };
   const laya: ProviderOk = { ok: true, name: "laya", endpoint: "https://nas.lan/v1/systemone", model: "laya", apiKey: "" };
   const answer = answered({ answers: { tier: { type: "choice", choice: "opus" } } });

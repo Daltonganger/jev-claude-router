@@ -41,11 +41,11 @@ const rec = (id: string, at: number, over: Partial<LedgerEntry> = {}): LedgerEnt
 
 describe("ledger: records", () => {
   test("a routed turn keeps what Jev named, what ran and who answered", () => {
-    const e = entryOf({ prompt: "x".repeat(500), ms: 412.6, decision: decision({ decider: "d3-turbo" }) }, "t1", NOW, "sess-1");
+    const e = entryOf({ prompt: "x".repeat(500), ms: 412.6, decision: decision({ decider: "d3-ultra" }) }, "t1", NOW, "sess-1");
     assert.equal(e.prompt.length, 200);
     assert.deepEqual({ ...e, prompt: undefined }, {
       id: "t1", at: NOW, session: "sess-1", prompt: undefined, digest: promptDigest("x".repeat(500)), ms: 413,
-      tier: "opus", model: "claude-opus-5-5", effort: "high", jev: "opus", confidence: 0.82, decider: "d3-turbo",
+      tier: "opus", model: "claude-opus-5-5", effort: "high", jev: "opus", confidence: 0.82, decider: "d3-ultra",
     });
   });
 
@@ -183,7 +183,7 @@ describe("ledger: stats", () => {
   const entries = [
     rec("1", NOW, { tier: "haiku", jev: "haiku", ms: 200, cost: 0.002, ...usage, label: "haiku" }),
     rec("2", NOW, { tier: "opus", jev: "opus", ms: 400, cost: 0.08, ...usage, label: "sonnet" }),
-    rec("3", NOW, { tier: "sonnet", jev: "opus", held: true, ms: 600, decider: "d3-turbo", cost: 0.04, ...usage, label: "fable" }),
+    rec("3", NOW, { tier: "sonnet", jev: "opus", held: true, ms: 600, decider: "d3-ultra", cost: 0.04, ...usage, label: "fable" }),
     rec("4", NOW, { jev: undefined, tier: undefined, skipped: "vllm: timed out after 1500ms; openrouter said HTTP 500" }),
   ];
 
@@ -193,7 +193,7 @@ describe("ledger: stats", () => {
     assert.equal(s.asked, 3);
     assert.equal(s.unrouted, 1);
     assert.deepEqual(s.ran, { haiku: 1, opus: 1, sonnet: 1 });
-    assert.deepEqual(s.deciders, [["Jev", 2], ["d3-turbo", 1]]);
+    assert.deepEqual(s.deciders, [["Jev", 2], ["d3-ultra", 1]]);
     assert.equal(s.held, 1);
     assert.equal(s.medianMs, 400);
     assert.ok(Math.abs(s.spent - 0.122) < 1e-9);
@@ -206,10 +206,10 @@ describe("ledger: stats", () => {
   test("the report says it in a few lines", () => {
     const text = statsReport(statsOf(entries), "7 days");
     assert.match(text, /turns\s+4 — haiku 1 \(25%\) · sonnet 1 \(25%\) · opus 1 \(25%\)/);
-    assert.match(text, /decided\s+3 by Jev 2, d3-turbo 1, median 400ms · 1 held on the running tier/);
+    assert.match(text, /decided\s+3 by Jev 2, d3-ultra 1, median 400ms · 1 held on the running tier/);
     assert.match(text, /unrouted\s+1 \(25%\): vllm: timed out; openrouter said HTTP 500 ×1/);
     assert.match(text, /spent\s+\$0\.122 at list price; the same tokens on always sonnet \$\d/);
-    assert.match(text, /verdicts\s+3 labelled: 33% right, 1 too low, 1 too high \(Jev 50% of 2, d3-turbo 0% of 1\)/);
+    assert.match(text, /verdicts\s+3 labelled: 33% right, 1 too low, 1 too high \(Jev 50% of 2, d3-ultra 0% of 1\)/);
     assert.match(statsReport(statsOf([]), "24 hours"), /No routed turns in this window yet/);
     assert.match(statsReport(statsOf(entries.slice(3)), "7 days"), /verdicts\s+none yet/);
     assert.match(statsReport(statsOf(entries), "7 days", { count: 2, reason: "store over 4 MiB" }), /missing\s+2 ledger writes failed in this session \(store over 4 MiB\): those turns are not counted/);

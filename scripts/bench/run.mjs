@@ -11,7 +11,7 @@
  *
  * Options:
  *   vllm:<model>               in --models: vLLM Semantic Router (https://decision.vllm-sr.ai, key VLLM_SR_API_KEY),
- *                               e.g. vllm:vllm-sr/d3-turbo. Read for its probabilities, as the router reads it.
+ *                               e.g. vllm:vllm-sr/d3-ultra. Read for its probabilities, as the router reads it.
  *   laya:<model>               in --models: your own Laya server instead of OpenRouter, e.g. laya:multilingual.
  *                               The address is LAYA_BASE_URL (or --laya-url), the key LAYA_API_KEY (none if the
  *                               server asks for none). Its confidence is read from x_jev_confidence.
@@ -77,7 +77,7 @@ export function wordingOf(raw, name = "wording") {
 /** vLLM Semantic Router's decision endpoint, as the router asks it (provider.ts). */
 export const VLLM_BASE = "https://decision.vllm-sr.ai";
 
-/** `laya:multilingual` is a model on your Laya server, `vllm:vllm-sr/d3-turbo` one on vLLM Semantic Router; anything else is an OpenRouter model id. */
+/** `laya:multilingual` is a model on your Laya server, `vllm:vllm-sr/d3-ultra` one on vLLM Semantic Router; anything else is an OpenRouter model id. */
 export function specOf(spec) {
   const m = /^(laya|vllm):(.+)$/.exec(spec);
   return m ? { route: m[1], model: m[2] } : { route: "openrouter", model: spec };

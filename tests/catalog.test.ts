@@ -26,7 +26,7 @@ import {
   type Catalog,
   type CatalogStore,
 } from "../hooks/catalog.ts";
-import { MODEL_OF, TIERS } from "../hooks/policy.ts";
+import { MODEL_OF, PLAN_OFFERS, TIERS } from "../hooks/policy.ts";
 import { PRICE, WINDOW_TOKENS } from "../hooks/pricing.ts";
 
 const P = { input: 1, write5m: 1.25, write1h: 2, read: 0.1, output: 5 };
@@ -115,6 +115,37 @@ describe("parseCatalog", () => {
     assert.strictEqual(c.plans.max?.note, undefined);
     f.plans.pro.note = "x".repeat(500);
     assert.strictEqual(parsed(f).plans.pro?.note?.length, 200);
+  });
+
+  it("reads a plan's offers, and drops a bad list alone", () => {
+    const f = file() as any;
+    f.plans.pro.offers = [
+      { lines: ["fable"], from: "2026-11-09T18:00:00Z", until: "2026-11-17T08:00:00Z", note: " Fable \n free " },
+      { lines: ["opus"], until: "2026-12-01T00:00:00+01:00" },
+    ];
+    f.plans.max.offers = [{ lines: ["fable"], from: "2026-11-17T08:00:00Z", until: "2026-11-09T18:00:00Z" }];
+    const r = parseCatalog(f);
+    assert.ok(r.ok);
+    assert.deepStrictEqual(r.catalog.plans.pro?.offers, [
+      { lines: ["fable"], from: Date.UTC(2026, 10, 9, 18), until: Date.UTC(2026, 10, 17, 8), note: "Fable free" },
+      { lines: ["opus"], until: Date.UTC(2026, 10, 30, 23) },
+    ]);
+    // An offer that ends before it starts is no offer; the plan still holds.
+    assert.strictEqual(r.catalog.plans.max?.offers, undefined);
+    assert.deepStrictEqual(r.catalog.plans.max?.excludeLines, []);
+    assert.ok(r.dropped.includes("offers of plan max"));
+    for (const bad of [
+      "soon",
+      [{ lines: ["fable"] }],
+      [{ lines: ["Fable"], until: "2026-11-17T08:00:00Z" }],
+      [{ lines: ["fable"], until: "2026-11-17" }],
+      [{ lines: ["fable"], until: "2026-11-17T08:00:00Z", from: 5 }],
+    ]) {
+      f.plans.max.offers = bad;
+      assert.strictEqual(parsed(f).plans.max?.offers, undefined, JSON.stringify(bad));
+    }
+    f.plans.max.offers = [];
+    assert.deepStrictEqual(parsed(f).plans.max?.offers, []);
   });
 
   it("reads confidence bars by model, and drops one that is not a bar", () => {
@@ -387,6 +418,13 @@ describe("catalog.json in the repo", () => {
   it("has a plan for each of pro, max and api", () => {
     assert.deepStrictEqual(Object.keys(catalog.plans).sort(), ["api", "max", "pro"]);
     assert.deepStrictEqual(catalog.plans.max?.excludeLines, []);
+  });
+
+  it("carries pro's offers as the built-in table does", () => {
+    assert.deepStrictEqual(
+      catalog.plans.pro?.offers?.map(({ lines, from, until }) => ({ lines, from, until })),
+      PLAN_OFFERS.pro?.map(({ lines, from, until }) => ({ lines, from, until })),
+    );
   });
 });
 

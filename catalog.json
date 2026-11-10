@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "updated": "2026-10-21",
-  "note": "Mirrors the plugin's built-in tables (pricing.ts, policy.ts) as of 'updated'. Edit here to change prices, windows or plans for every install without a new release. Pro excluding fable is the router's default, not something Anthropic requires: on Pro, Fable runs on usage credits. bars: measured on one person's 153 labelled prompts (2026-10-21, fable off); see docs/WERKDOCUMENT.md before relying on one. wordings/deciderWordings: other wording of the tier question, by decision model (keyed as bars); the plugin ships sonnet-wider and assigns none by default.",
+  "updated": "2026-11-10",
+  "note": "Mirrors the plugin's built-in tables (pricing.ts, policy.ts) as of 'updated'. Edit here to change prices, windows or plans for every install without a new release. Pro excluding fable is the router's default, not something Anthropic requires: on Pro, Fable runs on usage credits, except while one of the plan's offers holds (from/until, ISO dates), when its lines are offered again. bars: measured on one person's 153 labelled prompts (2026-10-21, fable off); see docs/WERKDOCUMENT.md before relying on one. wordings/deciderWordings: other wording of the tier question, by decision model (keyed as bars); the plugin ships sonnet-wider and assigns none by default.",
   "models": {
     "claude-haiku-5-5": {
       "line": "haiku",
@@ -63,7 +63,17 @@
       "excludeLines": [
         "fable"
       ],
-      "note": "Fable is not in Pro's usage limits: it runs on pay-as-you-go usage credits from the first token (support.claude.com/en/articles/15424964)"
+      "note": "Fable is not in Pro's usage limits: it runs on pay-as-you-go usage credits from the first token (support.claude.com/en/articles/15424964)",
+      "offers": [
+        {
+          "lines": [
+            "fable"
+          ],
+          "from": "2026-11-09T18:00:00Z",
+          "until": "2026-11-17T08:00:00Z",
+          "note": "Fable 5.2 launch offer: Fable is in Pro's usage limits (up to half the weekly limit) until 16 Nov 23:59 PT; after that, usage credits again (support.claude.com/en/articles/17506494)"
+        }
+      ]
     },
     "max": {
       "excludeLines": [],

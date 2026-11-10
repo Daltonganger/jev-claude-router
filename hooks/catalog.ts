@@ -17,7 +17,7 @@
 import { wordingOf, type Wording } from "./wording.ts";
 import { fetchText } from "./fetchtext.ts";
 import type { HttpInitLike, HttpResponseLike } from "./jev.ts";
-import { MODEL_OF, TIERS } from "./policy.ts";
+import { MODEL_OF, TIERS, type PlanOffer } from "./policy.ts";
 import { priceAt, type Overlay, type Price, type PriceTier } from "./pricing.ts";
 
 /** The format this module reads. A file that says a higher number is ignored. */
@@ -43,6 +43,7 @@ const MIN_WINDOW = 1_000;
 const MAX_WINDOW = 100_000_000;
 const MAX_MODELS = 500;
 const MAX_TIERS = 4;
+const MAX_OFFERS = 8;
 /** A price that moves by more than this factor between two copies is reported. */
 export const PRICE_JUMP_FACTOR = 4;
 
@@ -64,7 +65,13 @@ export type CatalogModel = {
   priceTiers?: PriceTier[];
 };
 
-export type CatalogPlan = { excludeLines: string[]; note?: string };
+/**
+ * `offers`: stretches in which the plan covers lines it otherwise leaves out
+ * (a launch offer), as `{ lines, from?, until, note? }` with ISO dates in the
+ * file and epoch milliseconds here. Present, even empty, it replaces the
+ * built-in offers for the plan; absent, the built-in ones answer.
+ */
+export type CatalogPlan = { excludeLines: string[]; note?: string; offers?: PlanOffer[] };
 
 /** The model ids a decider is reachable under; which host serves them is not the catalog's to say. */
 export type CatalogDecider = Record<string, string>;
@@ -144,6 +151,37 @@ function modelOf(raw: unknown): CatalogModel | null {
   return model;
 }
 
+const noteOf = (raw: unknown): string =>
+  typeof raw === "string" ? raw.replace(/\s+/g, " ").trim().slice(0, 200) : "";
+
+/** A date as the file spells one (ISO 8601, with a zone), or null. */
+function instantOf(raw: unknown): number | null {
+  if (typeof raw !== "string" || !/^\d{4}-\d{2}-\d{2}T[\d:.]+(?:Z|[+-]\d{2}:\d{2})$/.test(raw)) return null;
+  const at = Date.parse(raw);
+  return Number.isFinite(at) ? at : null;
+}
+
+/** A plan's offers, or null when any one of them is not an offer. */
+function offersOf(raw: unknown): PlanOffer[] | null {
+  if (!Array.isArray(raw) || raw.length > MAX_OFFERS) return null;
+  const out: PlanOffer[] = [];
+  for (const o of raw) {
+    if (!isRecord(o) || !Array.isArray(o.lines) || o.lines.length > 16) return null;
+    if (!o.lines.every((l) => typeof l === "string" && WORD.test(l))) return null;
+    const until = instantOf(o.until);
+    const from = o.from === undefined ? undefined : instantOf(o.from);
+    if (until === null || from === null || (from !== undefined && from >= until)) return null;
+    const note = noteOf(o.note);
+    out.push({
+      lines: [...(o.lines as string[])],
+      ...(from !== undefined ? { from } : {}),
+      until,
+      ...(note !== "" ? { note } : {}),
+    });
+  }
+  return out;
+}
+
 function deciderOf(raw: unknown): CatalogDecider | null {
   if (!isRecord(raw)) return null;
   const out: CatalogDecider = {};
@@ -191,8 +229,16 @@ export function parseCatalog(raw: unknown): ParseResult {
     )
       dropped.push(`plan ${name.slice(0, 60)}`);
     else {
-      const note = isRecord(entry) && typeof entry.note === "string" ? entry.note.replace(/\s+/g, " ").trim().slice(0, 200) : "";
-      plans[name] = { excludeLines: [...lines] as string[], ...(note !== "" ? { note } : {}) };
+      const plan = entry as Record<string, unknown>;
+      const note = noteOf(plan.note);
+      // A bad offers list drops the offers alone: the plan's lines still hold.
+      const offers = plan.offers === undefined ? undefined : offersOf(plan.offers);
+      if (offers === null) dropped.push(`offers of plan ${name}`);
+      plans[name] = {
+        excludeLines: [...lines] as string[],
+        ...(note !== "" ? { note } : {}),
+        ...(offers ? { offers } : {}),
+      };
     }
   }
 

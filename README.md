@@ -526,7 +526,7 @@ flattered by them, so choose on one set and confirm on another that shares nothi
 | `JEV_ROUTER_CACHE_TTL` | `1h` | Cache lifetime used for pricing: `1h` (what Claude Code writes) or `5m`. |
 | `JEV_ROUTER_CEILING` | `xhigh` | Effort ceiling: an effort for all tiers, or per tier, e.g. `fable:medium,opus:high`. |
 | `JEV_ROUTER_EXCLUDE` | | Tiers not offered to Jev at session start, e.g. `fable,haiku` (commas, semicolons or spaces); `/jev tiers` toggles this per session. |
-| `JEV_ROUTER_PLAN` | | `pro`, `max` or `api`: the tiers the plan does not cover are not offered, on top of `JEV_ROUTER_EXCLUDE`. Pro leaves out `fable` (an assumption, corrected in `catalog.json`); max and api leave out nothing. Unset offers every tier. `/jev tiers on fable` brings one back for a session. |
+| `JEV_ROUTER_PLAN` | | `pro`, `max` or `api`: the tiers the plan does not cover are not offered, on top of `JEV_ROUTER_EXCLUDE`. Pro leaves out `fable` (an assumption, corrected in `catalog.json`), except during an offer that puts it in Pro's limits: the Fable 5.2 launch week, until 16 November 2026 23:59 PT, offers it, and a session still open when the offer ends drops it on its next turn. max and api leave out nothing. Unset offers every tier. `/jev tiers on fable` brings one back for a session. |
 | `JEV_ROUTER_ALLOW_OVERRIDE` | on | `0` ignores tiers named in prompts. |
 | `JEV_ROUTER_NOTIFY_CONTINUE` | on | `0` asks Jev about finished-task turns. |
 

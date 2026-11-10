@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { ladderPrice, priceOfModel, sameModelAs, setOverlay, setSyncedWindows, WINDOW_TOKENS } from "../hooks/pricing.ts";
 import { setEffortSupport, setLadderModels } from "../hooks/policy.ts";
-import { afterEach, describe, test } from "node:test";
+import { afterEach, beforeEach, describe, mock, test } from "node:test";
 
 import { CATALOG_WAIT_MS, register } from "../hooks/register.ts";
 import { ledgerKey } from "../hooks/ledger.ts";
@@ -5432,6 +5432,13 @@ describe("register: plan and catalog (2026-10-21)", () => {
   // The catalog is applied to the pricing functions for the whole process.
   const reset = () => setOverlay(null);
   afterEach(reset);
+  // The clock outside every built-in plan offer, unless a test moves it.
+  let clock = Date.UTC(2027, 0, 1);
+  beforeEach(() => {
+    clock = Date.UTC(2027, 0, 1);
+    mock.method(Date, "now", () => clock);
+  });
+  afterEach(() => mock.restoreAll());
 
   const file = (over: Record<string, unknown> = {}) => ({
     schema: 1,
@@ -5455,6 +5462,60 @@ describe("register: plan and catalog (2026-10-21)", () => {
     assert.match(r, /plan\s+pro, does not cover fable — Fable is not in Pro's usage limits: it runs on pay-as-you-go usage credits/);
     assert.match(r, /tiers\s+haiku, sonnet, opus\n/);
     assert.match(r, /excluded\s+fable/);
+  });
+
+  test("pro offers fable through the Fable 5.2 launch week, and the report says so", async () => {
+    clock = Date.UTC(2026, 10, 10, 12);
+    const kit = await started({ JEV_ROUTER_PLAN: "pro" });
+    const r = await report(kit);
+    assert.match(r, /plan\s+pro, every tier covered — Fable 5\.2 launch offer: Fable is in Pro's usage limits/);
+    assert.match(r, /tiers\s+haiku, sonnet, opus, fable/);
+    assert.doesNotMatch(r, /excluded\s+fable/);
+  });
+
+  test("a pro session still open when the offer ends stops offering fable", async () => {
+    clock = Date.UTC(2026, 10, 17, 7, 59);
+    const kit = await started({ JEV_ROUTER_PLAN: "pro" });
+    assert.match(await report(kit), /tiers\s+haiku, sonnet, opus, fable/);
+    clock = Date.UTC(2026, 10, 17, 8, 0);
+    const r = await report(kit);
+    assert.match(r, /tiers\s+haiku, sonnet, opus\n/);
+    assert.match(r, /plan\s+pro, does not cover fable — Fable is not in Pro's usage limits/);
+  });
+
+  test("when the offer ends only fable goes: other tiers set by /jev tiers stay as set", async () => {
+    clock = Date.UTC(2026, 10, 17, 7, 59);
+    const kit = await started({ JEV_ROUTER_PLAN: "pro" });
+    await kit.hooks.get('command.run:{"command":"jev"}')!(kit.$, { args: "tiers off haiku" });
+    assert.match(await report(kit), /tiers\s+sonnet, opus, fable/);
+    clock = Date.UTC(2026, 10, 17, 8, 0);
+    assert.match(await report(kit), /tiers\s+sonnet, opus\n/);
+    // Asked for again after the offer, it is the person's to pay for, and stays.
+    await kit.hooks.get('command.run:{"command":"jev"}')!(kit.$, { args: "tiers on fable" });
+    clock = Date.UTC(2026, 10, 18);
+    assert.match(await report(kit), /tiers\s+sonnet, opus, fable/);
+  });
+
+  test("a turn in the offer week can be sent to fable", async () => {
+    clock = Date.UTC(2026, 10, 10, 12);
+    const kit = await started({ JEV_ROUTER_PLAN: "pro" });
+    kit.setTier("fable", 0.95, 3);
+    await kit.hooks.get("turn.start")!(kit.$, { text: "plan the migration", turnId: "f1" }, async (e: unknown) => e);
+    let sent: { model?: string } = {};
+    for await (const _ of kit.hooks.get("turn.step")!(kit.$, { turnId: "f1", index: 0 }, (e: { model: string }) => {
+      sent = e;
+      return answeredBy("claude-fable-5-1");
+    }));
+    assert.equal(sent.model, "claude-fable-5-1");
+  });
+
+  test("the catalog's offers replace the built-in ones", async () => {
+    clock = Date.UTC(2026, 10, 10, 12);
+    const kit = await started(
+      { JEV_ROUTER_PLAN: "pro", JEV_ROUTER_CATALOG: undefined },
+      file({ plans: { pro: { excludeLines: ["fable"], offers: [] } } }),
+    );
+    assert.match(await report(kit), /plan\s+pro, does not cover fable/);
   });
 
   test("the catalog can word the plan note itself", async () => {

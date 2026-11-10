@@ -25,9 +25,13 @@ import {
   MODEL_OF,
   offeredTiers,
   parseOverride,
+  activeOffers,
+  nextOfferChange,
   PLAN_EXCLUDES,
+  PLAN_OFFERS,
   planExclusions,
   planOf,
+  planOfferNote,
   setEffortSupport,
   setLadderModels,
   supportedEffort,
@@ -1007,11 +1011,53 @@ describe("plans", () => {
     assert.equal(planOf(" Pro "), "pro");
   });
 
+  // Outside every built-in offer, so the plain table answers.
+  const LATER = Date.UTC(2027, 0, 1);
+
   test("the built-in table: pro leaves out fable, max and api leave out nothing", () => {
-    assert.deepEqual(planExclusions("pro"), ["fable"]);
-    assert.deepEqual(planExclusions("max"), []);
-    assert.deepEqual(planExclusions("api"), []);
+    assert.deepEqual(planExclusions("pro", undefined, undefined, LATER), ["fable"]);
+    assert.deepEqual(planExclusions("max", undefined, undefined, LATER), []);
+    assert.deepEqual(planExclusions("api", undefined, undefined, LATER), []);
     assert.deepEqual(Object.keys(PLAN_EXCLUDES).sort(), ["api", "max", "pro"]);
+  });
+
+  test("pro offers fable through the Fable 5.2 launch week, and not before or after", () => {
+    const start = Date.UTC(2026, 10, 9, 18, 0); // 9 Nov 10:00 PT
+    const end = Date.UTC(2026, 10, 17, 8, 0); // 16 Nov 23:59:59 PT is just before
+    assert.deepEqual(planExclusions("pro", undefined, undefined, start - 1), ["fable"]);
+    assert.deepEqual(planExclusions("pro", undefined, undefined, start), []);
+    assert.deepEqual(planExclusions("pro", undefined, undefined, Date.UTC(2026, 10, 10, 12)), []);
+    assert.deepEqual(planExclusions("pro", undefined, undefined, end - 1), []);
+    assert.deepEqual(planExclusions("pro", undefined, undefined, end), ["fable"]);
+    assert.match(planOfferNote("pro", undefined, start) ?? "", /launch offer/);
+    assert.equal(planOfferNote("pro", undefined, end), null);
+    assert.equal(planOfferNote(null, undefined, start), null);
+    assert.equal(PLAN_OFFERS.pro?.length, 1);
+  });
+
+  test("the catalog's offers replace the built-in ones, even when there are none", () => {
+    const now = Date.UTC(2026, 10, 10, 12);
+    assert.deepEqual(planExclusions("pro", ["fable"], [], now), ["fable"]);
+    const offer = { lines: ["opus", "fable"], until: now + 1 };
+    assert.deepEqual(planExclusions("pro", ["fable", "opus"], [offer], now), []);
+    assert.deepEqual(planExclusions("pro", ["fable", "opus"], [{ lines: ["fable"], until: now }], now), ["opus", "fable"]);
+    // An offer for a line the plan never leaves out changes nothing.
+    assert.deepEqual(planExclusions("max", [], [offer], now), []);
+  });
+
+  test("when the plan's tiers next change", () => {
+    const offers = [
+      { lines: ["fable"], from: 100, until: 200 },
+      { lines: ["opus"], from: 150, until: 400 },
+    ];
+    assert.equal(nextOfferChange(offers, 50), 100);
+    assert.equal(nextOfferChange(offers, 120), 150);
+    assert.equal(nextOfferChange(offers, 160), 200);
+    assert.equal(nextOfferChange(offers, 250), 400);
+    assert.equal(nextOfferChange(offers, 400), null);
+    assert.equal(nextOfferChange(undefined, 0), null);
+    assert.deepEqual(activeOffers(offers, 160).map((o) => o.lines[0]), ["fable", "opus"]);
+    assert.deepEqual(activeOffers([{ lines: ["fable"], until: 10 }], 0).length, 1);
   });
 
   test("no plan, or one nobody knows, leaves nothing out", () => {
@@ -1020,10 +1066,10 @@ describe("plans", () => {
   });
 
   test("the catalog's lines replace the built-in ones, and only ladder tiers count", () => {
-    assert.deepEqual(planExclusions("pro", []), []);
-    assert.deepEqual(planExclusions("pro", ["fable", "opus"]), ["opus", "fable"]);
-    assert.deepEqual(planExclusions("pro", ["mythos", "Fable"]), []);
-    assert.deepEqual(planExclusions("team", ["fable"]), ["fable"]);
+    assert.deepEqual(planExclusions("pro", [], undefined, LATER), []);
+    assert.deepEqual(planExclusions("pro", ["fable", "opus"], undefined, LATER), ["opus", "fable"]);
+    assert.deepEqual(planExclusions("pro", ["mythos", "Fable"], undefined, LATER), []);
+    assert.deepEqual(planExclusions("team", ["fable"], undefined, LATER), ["fable"]);
   });
 });
 

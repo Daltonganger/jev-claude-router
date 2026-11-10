@@ -12,6 +12,15 @@
 
 ### Fixes
 
+- **Fable on Pro during the Fable 5.2 launch week.** With `JEV_ROUTER_PLAN=pro`,
+  Fable is offered again from 9 November 2026 10:00 PT through 16 November
+  23:59 PT, while Anthropic includes it in Pro's usage limits (up to half the
+  weekly limit), instead of being sent to Opus. When the offer ends, a session
+  still open stops offering Fable on its next turn; other tiers set with
+  `/jev tiers` stay as set. `/jev` shows the offer in the plan line. A plan in
+  `catalog.json` can carry such offers (`offers: [{ lines, from, until, note }]`),
+  which replace the built-in ones.
+
 - The vllm route defaults to `vllm-sr/d3-ultra` instead of `vllm-sr/d3-turbo`:
   vLLM Semantic Router serves `vllm-sr/d3-turbo` as `vllm-sr/d3-ultra` (same answers, the response names d3-ultra) and the key's quota lists only d3-ultra. `d3-ultra` and `d3-turbo` both name the route in
   `JEV_ROUTER_PROVIDER`; `VLLM_SR_MODEL` still picks another.

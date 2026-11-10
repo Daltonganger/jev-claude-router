@@ -50,10 +50,13 @@ import {
   offeredTiers,
   overrideAllowedOf,
   PLAN_NOTES,
+  PLAN_OFFERS,
   barsOf,
   confidenceShareOf,
+  nextOfferChange,
   planExclusions,
   planOf,
+  planOfferNote,
   setEffortSupport,
   setLadderModels,
   MODEL_OF,
@@ -71,6 +74,7 @@ import {
   type Effort,
   type Tier,
 } from "./policy.ts";
+import type { CatalogPlan } from "./catalog.ts";
 import {
   tierOfModel,
   baseModel,
@@ -433,8 +437,12 @@ type Settings = {
   plan: string | null;
   /** The tiers the plan leaves out; already part of `excluded` at the start of the session. */
   planExcluded: readonly Tier[];
-  /** What the plan means for them: the catalog's word, else the built-in note. */
+  /** What the plan means for them: an offer's word while it holds, the catalog's, else the built-in note. */
   planNote: string | null;
+  /** The catalog's entry for the plan, as the session started with it; null without one. */
+  planCatalog: CatalogPlan | null;
+  /** When an offer starts or ends and the plan's tiers change (epoch ms); null when none will. */
+  planChangeAt: number | null;
   /** The catalog: what has come in so far, and whether it is still on its way. */
   catalog: { result: LoadResult | null; loading: boolean };
   /** The model list: what it found, what the ladder took from it, and why it was not asked. */
@@ -588,7 +596,9 @@ async function seedSettings(
   ]);
   applySync(catalog, models, modelsState);
   const plan = planOf(await $.env.get("JEV_ROUTER_PLAN"));
-  const planExcluded = planExclusions(plan, plan === null ? undefined : catalog?.plans[plan]?.excludeLines);
+  const planCatalog = plan === null ? null : (catalog?.plans[plan] ?? null);
+  const now = Date.now();
+  const planExcluded = planExclusions(plan, planCatalog?.excludeLines, planCatalog?.offers, now);
   const tiers = tierFilter(
     new Set([...excludedTiers(await $.env.get("JEV_ROUTER_EXCLUDE")), ...planExcluded]),
   );
@@ -658,10 +668,41 @@ async function seedSettings(
     ),
     plan,
     planExcluded,
-    planNote: plan === null ? null : (catalog?.plans[plan]?.note ?? PLAN_NOTES[plan] ?? null),
+    planNote: planNoteOf(plan, planCatalog, now),
+    planCatalog,
+    planChangeAt: plan === null ? null : nextOfferChange(planCatalog?.offers ?? PLAN_OFFERS[plan], now),
     catalog: catalogState,
     models: modelsState,
   };
+}
+
+function planNoteOf(plan: string | null, planCatalog: CatalogPlan | null, now: number): string | null {
+  if (plan === null) return null;
+  return planOfferNote(plan, planCatalog?.offers, now) ?? planCatalog?.note ?? PLAN_NOTES[plan] ?? null;
+}
+
+/**
+ * Follows an offer that started or ended since the session began: the plan's
+ * tiers, its note, and what is offered. Only the tiers the plan itself moves
+ * change; the rest of what `/jev tiers` set stays. A Pro session still open
+ * when the Fable offer ends stops routing to Fable on its next turn instead
+ * of running on credits, even if `/jev tiers on fable` was said during it:
+ * after the offer, that is a choice to pay for, made again.
+ */
+function refreshPlan(settings: Settings, now: number): void {
+  if (settings.planChangeAt === null || now < settings.planChangeAt) return;
+  const { plan, planCatalog } = settings;
+  const before = settings.planExcluded;
+  const after = planExclusions(plan, planCatalog?.excludeLines, planCatalog?.offers, now);
+  settings.planExcluded = after;
+  settings.planNote = planNoteOf(plan, planCatalog, now);
+  settings.planChangeAt = plan === null ? null : nextOfferChange(planCatalog?.offers ?? PLAN_OFFERS[plan], now);
+  const excluded = new Set(settings.excluded);
+  for (const t of before) excluded.delete(t);
+  for (const t of after) excluded.add(t);
+  const tiers = tierFilter(excluded);
+  settings.excluded = tiers.excluded;
+  settings.offered = tiers.offered;
 }
 
 /**
@@ -1808,6 +1849,7 @@ export function register(on: On) {
         applyState(restoredFrom(snapshotKey, await loadSnapshot($, snapshotKey), await ownerOf($, snapshotKey)));
       restoreOnKey = true;
     }
+    refreshPlan(settings, Date.now());
     // An older copy hands /jev to the owner: answering itself would report
     // its frozen state and change settings the owner never sees.
     if (
@@ -2026,6 +2068,7 @@ export function register(on: On) {
       running = unconfirmed.was;
       unconfirmed = null;
     }
+    refreshPlan(settings, Date.now());
     const { offered, ceiling } = settings;
     // Jev is the long pole of the turn, so it is asked before anything
     // else is read. A copy that then cedes the turn drops the answer: one

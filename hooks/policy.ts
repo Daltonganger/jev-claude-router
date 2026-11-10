@@ -210,6 +210,56 @@ export const PLAN_NOTES: Record<string, string> = {
   api: "billed at API rates",
 };
 
+/**
+ * A stretch of time in which a plan covers tiers it otherwise leaves out: a
+ * launch offer. `from` and `until` are epoch milliseconds; the offer holds
+ * from `from` (or always, without one) up to, not including, `until`.
+ */
+export type PlanOffer = {
+  lines: readonly string[];
+  from?: number;
+  until: number;
+  note?: string;
+};
+
+/**
+ * Offers each plan has when the catalog has no word on them. Pro: Anthropic's
+ * Fable 5.2 launch offer (support.claude.com, article 17506494, "Claude Fable
+ * 5.2 launch offers", read 2026-11-10) puts every Fable model in Pro's usage
+ * limits from 2026-11-09 10:00 PT through 2026-11-16 23:59 PT, up to half the
+ * weekly limit. PST is UTC−8, so it ends at 2026-11-17 08:00 UTC.
+ */
+export const PLAN_OFFERS: Record<string, readonly PlanOffer[]> = {
+  pro: [
+    {
+      lines: ["fable"],
+      from: Date.UTC(2026, 10, 9, 18, 0),
+      until: Date.UTC(2026, 10, 17, 8, 0),
+      note:
+        "Fable 5.2 launch offer: Fable is in Pro's usage limits (up to half the weekly limit) " +
+        "until 16 Nov 23:59 PT; after that, usage credits again",
+    },
+  ],
+};
+
+/** The offers that hold at `now`, in the order given. */
+export function activeOffers(offers: readonly PlanOffer[] | undefined, now: number): PlanOffer[] {
+  return (offers ?? []).filter((o) => (o.from === undefined || now >= o.from) && now < o.until);
+}
+
+/**
+ * When the plan's exclusions next change: the earliest end of an offer that
+ * holds now, or the start of one still to come. Null when nothing changes.
+ */
+export function nextOfferChange(offers: readonly PlanOffer[] | undefined, now: number): number | null {
+  let next: number | null = null;
+  for (const o of offers ?? []) {
+    const at = o.from !== undefined && now < o.from ? o.from : now < o.until ? o.until : null;
+    if (at !== null && (next === null || at < next)) next = at;
+  }
+  return next;
+}
+
 /** `JEV_ROUTER_PLAN`, lowercased, or null when unset or blank. */
 export function planOf(raw: string | undefined): string | null {
   const plan = (raw ?? "").trim().toLowerCase();
@@ -220,11 +270,30 @@ export function planOf(raw: string | undefined): string | null {
  * The tiers a plan does not cover. The catalog's lines for the plan when it
  * has the plan, else the built-in table; a plan neither knows leaves nothing
  * out. Lines that are not a tier on the ladder (`mythos`) are no tier here.
+ *
+ * An offer that holds at `now` puts its lines back: the catalog's offers for
+ * the plan when it gives them, else the built-in ones.
  */
-export function planExclusions(plan: string | null, catalogLines?: readonly string[]): Tier[] {
+export function planExclusions(
+  plan: string | null,
+  catalogLines?: readonly string[],
+  catalogOffers?: readonly PlanOffer[],
+  now: number = Date.now(),
+): Tier[] {
   if (plan === null) return [];
   const lines = catalogLines ?? PLAN_EXCLUDES[plan] ?? [];
-  return TIERS.filter((t) => lines.includes(t));
+  const freed = new Set(activeOffers(catalogOffers ?? PLAN_OFFERS[plan], now).flatMap((o) => o.lines));
+  return TIERS.filter((t) => lines.includes(t) && !freed.has(t));
+}
+
+/** The note of the first offer that holds at `now` for the plan, or null. */
+export function planOfferNote(
+  plan: string | null,
+  catalogOffers?: readonly PlanOffer[],
+  now: number = Date.now(),
+): string | null {
+  if (plan === null) return null;
+  return activeOffers(catalogOffers ?? PLAN_OFFERS[plan], now).find((o) => o.note !== undefined)?.note ?? null;
 }
 
 /** The tiers offered to Jev, in ladder order, never empty. */

@@ -61,7 +61,7 @@ describe("policy", () => {
   test("a tier Jev picked becomes that tier’s model id", () => {
     const d = decisionOf(choice("fable"));
     assert.equal(d?.tier, "fable");
-    assert.equal(d?.model, "claude-fable-5-1");
+    assert.equal(d?.model, "claude-fable-5-2");
   });
 
   test("a confidence outside 0..1 is clamped, not passed through", () => {
@@ -1083,7 +1083,7 @@ describe("models taken from the model list", () => {
     const was = MODEL_OF.opus;
     setLadderModels({ opus: "claude-opus-6" });
     assert.equal(MODEL_OF.opus, "claude-opus-6");
-    assert.equal(MODEL_OF.fable, "claude-fable-5-1", "the others stay");
+    assert.equal(MODEL_OF.fable, "claude-fable-5-2", "the others stay");
     setLadderModels(null);
     assert.equal(MODEL_OF.opus, was);
   });

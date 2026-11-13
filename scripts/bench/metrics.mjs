@@ -14,7 +14,7 @@ const rank = (t) => TIERS.indexOf(t);
  * 2026-10-21 (hooks/pricing.ts: Haiku 5.5 up to 100k, Sonnet 5.5, Opus 5.5, Fable 5.1).
  * A test keeps this equal to that table.
  */
-export const OUTPUT_PRICE = { haiku: 0.5, sonnet: 10, opus: 20, fable: 50 };
+export const OUTPUT_PRICE = { haiku: 0.5, sonnet: 10, opus: 20, fable: 40 };
 
 /**
  * A rough index of what following the picks costs against following your labels: the

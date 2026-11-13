@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated": "2026-11-10",
+  "updated": "2026-11-13",
   "note": "Mirrors the plugin's built-in tables (pricing.ts, policy.ts) as of 'updated'. Edit here to change prices, windows or plans for every install without a new release. Pro excluding fable is the router's default, not something Anthropic requires: on Pro, Fable runs on usage credits, except while one of the plan's offers holds (from/until, ISO dates), when its lines are offered again. bars: measured on one person's 153 labelled prompts (2026-10-21, fable off); see docs/WERKDOCUMENT.md before relying on one. wordings/deciderWordings: other wording of the tier question, by decision model (keyed as bars); the plugin ships sonnet-wider and assigns none by default.",
   "models": {
     "claude-haiku-5-5": {
@@ -55,6 +55,17 @@
         "write1h": 20,
         "read": 0.25,
         "output": 50
+      }
+    },
+    "claude-fable-5-2": {
+      "line": "fable",
+      "maxInputTokens": 1000000,
+      "price": {
+        "input": 8,
+        "write5m": 10,
+        "write1h": 16,
+        "read": 0.2,
+        "output": 40
       }
     }
   },

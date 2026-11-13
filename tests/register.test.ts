@@ -255,7 +255,7 @@ describe("register: the route in the reply", () => {
     let sent: { model?: string; effort?: string } = {};
     const step = hooks.get("turn.step")!(
       $,
-      { turnId: "t1", index: 0, model: "claude-fable-5-1" },
+      { turnId: "t1", index: 0, model: "claude-fable-5-2" },
       (e: { model: string; effort: string }) => {
         sent = e;
         return modelSays("Hello", " there.");
@@ -1086,7 +1086,7 @@ describe("register: a bare go-ahead", () => {
     // Jev would say haiku at 1.00 here (measured), which clears any bar.
     setTier("haiku", 1, 0);
     const second = await turn(hooks, $, "g2", "yes");
-    assert.equal(second.sent.model, "claude-fable-5-1");
+    assert.equal(second.sent.model, "claude-fable-5-2");
     // xhigh is exactly the default ceiling, so it is not capped at all; the
     // go-ahead carries the same effort Jev asked for.
     assert.equal(second.sent.effort, "xhigh");
@@ -1102,7 +1102,7 @@ describe("register: a bare go-ahead", () => {
     const held = await turn(hooks, $, "g4", "now the tests");
     assert.match(held.text, /kept fable: Jev \d+% on haiku/);
     const go = await turn(hooks, $, "g5", "ok");
-    assert.equal(go.sent.model, "claude-fable-5-1");
+    assert.equal(go.sent.model, "claude-fable-5-2");
     assert.doesNotMatch(go.text, /kept/);
     assert.match(go.text, /continuing/);
   });
@@ -1124,7 +1124,7 @@ describe("register: a bare go-ahead", () => {
     await turn(hooks, $, "g8", "go ahead");
     setTier("haiku", 0.4);
     const t = await turn(hooks, $, "g9", "and the tests");
-    assert.equal(t.sent.model, "claude-fable-5-1", "held to fable, via the go-ahead");
+    assert.equal(t.sent.model, "claude-fable-5-2", "held to fable, via the go-ahead");
   });
 
   test("when Jev fails, the turn stays on the tier running, and a go-ahead continues it", async () => {
@@ -1133,14 +1133,14 @@ describe("register: a bare go-ahead", () => {
     await turn(hooks, $, "u1", "plan it");
     fail();
     const failed = await turn(hooks, $, "u2", "timeout turn");
-    assert.equal(failed.sent.model, "claude-fable-5-1", "stayed on fable, not a switch to the session model");
+    assert.equal(failed.sent.model, "claude-fable-5-2", "stayed on fable, not a switch to the session model");
     assert.match(failed.text, /kept fable: Jev /);
     assert.doesNotMatch(failed.text, /Jev 0%/);
     const asked = fetches();
     setTier("haiku", 1, 0);
     const go = await turn(hooks, $, "u3", "yes");
     assert.equal(fetches(), asked, "Jev is not asked");
-    assert.equal(go.sent.model, "claude-fable-5-1");
+    assert.equal(go.sent.model, "claude-fable-5-2");
   });
 
   test("after /jev off then on, a go-ahead does not replay the pre-off route", async () => {
@@ -1278,7 +1278,7 @@ describe("register: a spawned subagent", () => {
     prompt: "List the files under hooks/ and report the count.",
     description: "Count hook files",
     subagentType: "Explore",
-    parentModel: "claude-fable-5-1",
+    parentModel: "claude-fable-5-2",
     fork: false,
     background: false,
     ...over,
@@ -1295,14 +1295,14 @@ describe("register: a spawned subagent", () => {
       input,
       async (e: { model?: string }) => {
         passed = e;
-        return { model: e.model ?? "claude-fable-5-1", agentId: "agent-1" };
+        return { model: e.model ?? "claude-fable-5-2", agentId: "agent-1" };
       },
     );
     let sent: { model?: string; effort?: string } = {};
     const chunks = await collect(
       kit.hooks.get("turn.step")!(
         kit.$,
-        { turnId: "sub-1", index: 0, agentId: "agent-1", model: "claude-fable-5-1", effort: "high" },
+        { turnId: "sub-1", index: 0, agentId: "agent-1", model: "claude-fable-5-2", effort: "high" },
         (e: { model: string; effort: string }) => {
           sent = e;
           return answeredBy(e.model);
@@ -1354,7 +1354,7 @@ describe("register: a spawned subagent", () => {
     kit.setTier("sonnet", 0.22);
     const { passed, sent } = await spawnAndStep(kit, spawnOf());
     assert.equal(passed?.model, undefined);
-    assert.equal(sent.model, "claude-fable-5-1", "the step is left alone too");
+    assert.equal(sent.model, "claude-fable-5-2", "the step is left alone too");
     const out = await kit.hooks.get('command.run:{"command":"jev"}')!(kit.$, {
       args: "",
     });
@@ -1416,7 +1416,7 @@ describe("register: a spawned subagent", () => {
       kit.$,
       spawnOf(),
       async (e: { model?: string }) => ({
-        model: e.model ?? "claude-fable-5-1",
+        model: e.model ?? "claude-fable-5-2",
         agentId: "agent-1",
       }),
     );
@@ -1429,7 +1429,7 @@ describe("register: a spawned subagent", () => {
           turnId: "sub-after-off",
           index: 0,
           agentId: "agent-1",
-          model: "claude-fable-5-1",
+          model: "claude-fable-5-2",
           effort: "high",
         },
         (e: { model: string; effort: string }) => {
@@ -1438,7 +1438,7 @@ describe("register: a spawned subagent", () => {
         },
       ),
     );
-    assert.equal(sent.model, "claude-fable-5-1", "cached spawn decision is not applied");
+    assert.equal(sent.model, "claude-fable-5-2", "cached spawn decision is not applied");
     assert.equal(sent.effort, "high");
   });
 
@@ -1449,7 +1449,7 @@ describe("register: a spawned subagent", () => {
       kit.$,
       spawnOf(),
       async (e: { model?: string }) => ({
-        model: e.model ?? "claude-fable-5-1",
+        model: e.model ?? "claude-fable-5-2",
         agentId: "agent-1",
       }),
     );
@@ -1465,7 +1465,7 @@ describe("register: a spawned subagent", () => {
           turnId: "sub-after-on",
           index: 0,
           agentId: "agent-1",
-          model: "claude-fable-5-1",
+          model: "claude-fable-5-2",
           effort: "high",
         },
         (e: { model: string; effort: string }) => {
@@ -1528,7 +1528,7 @@ describe("register: a downgrade priced against the context", () => {
     setContext(150_000);
     setTier("haiku", 0.99, 0);
     const t = await turn(hooks, $, "p2", "what is 2+2");
-    assert.equal(t.sent.model, "claude-fable-5-1");
+    assert.equal(t.sent.model, "claude-fable-5-2");
     assert.equal(t.sent.effort, "low", "Jev's effort still applies");
     assert.match(t.text, /kept fable: haiku costs \$\d+\.\d+ vs \$\d/);
   });
@@ -1554,7 +1554,7 @@ describe("register: a downgrade priced against the context", () => {
     await turn(hooks, $, "r1", "plan the migration");
     setTier("haiku", 0.99, 0);
     const t = await turn(hooks, $, "r2", "2+2");
-    assert.equal(t.sent.model, "claude-fable-5-1");
+    assert.equal(t.sent.model, "claude-fable-5-2");
     assert.match(t.text, /kept fable: haiku costs \$/);
   });
 
@@ -1578,7 +1578,7 @@ describe("register: a downgrade priced against the context", () => {
     setContext(150_000);
     setTier("haiku", 0.99, 0);
     const held = await turn(hooks, $, "s2", "2+2");
-    assert.equal(held.sent.model, "claude-fable-5-1", "the price check still holds");
+    assert.equal(held.sent.model, "claude-fable-5-2", "the price check still holds");
     assert.match(held.text, /kept fable: haiku costs/);
     assert.match((await run(hooks, $, "price off")).text, /^price checks off/);
     setTier("haiku", 0.99, 0);
@@ -1609,7 +1609,7 @@ describe("register: a downgrade priced against the context", () => {
     // The output is taken as the last turn's or 1.5k, whichever is smaller, so
     // 1.5k at 4k context: pays on the five-minute cache (break-even ~5k), not on the hour's (~3k).
     assert.equal(await at("5m", 4_000), "claude-haiku-5-5");
-    assert.equal(await at(undefined, 4_000), "claude-fable-5-1");
+    assert.equal(await at(undefined, 4_000), "claude-fable-5-2");
   });
 
   test("/jev shows the context and the break-even, and the session's dollars", async () => {
@@ -1620,7 +1620,7 @@ describe("register: a downgrade priced against the context", () => {
     const status = await run(hooks, $, "");
     assert.match(status.text, /cache\s+1h writes · 200k context · fable→haiku pays below [\d.]+k/);
     assert.match(status.text, /spent\s+\$0\.\d+ this session/);
-    assert.match(status.text, /fable-5-1 ✓ · \$0\.\d+ · 10k in \(90% cached\) · 3k out/);
+    assert.match(status.text, /fable-5-2 ✓ · \$0\.\d+ · 10k in \(90% cached\) · 3k out/);
   });
 
   test("a compaction forgets what was running, so the next turn starts from Jev", async () => {
@@ -1643,7 +1643,7 @@ describe("register: a downgrade priced against the context", () => {
     setContext(150_000);
     await hooks.get("session.compact")!($, { trigger: "precompute" }, async (e: unknown) => e);
     setTier("haiku", 0.99, 0);
-    assert.equal((await turn(hooks, $, "x2", "2+2")).sent.model, "claude-fable-5-1");
+    assert.equal((await turn(hooks, $, "x2", "2+2")).sent.model, "claude-fable-5-2");
   });
 });
 
@@ -1798,7 +1798,7 @@ describe("register: the tiers subcommand", () => {
     await run(hooks, $, "tiers off fable");
     await run(hooks, $, "tiers on fable");
     setTier("fable", 0.95, 3);
-    assert.equal((await turn(hooks, $, "tf2")).sent.model, "claude-fable-5-1");
+    assert.equal((await turn(hooks, $, "tf2")).sent.model, "claude-fable-5-2");
   });
 
   describe("turning a tier off actually stops using it once it is already running (production defaults: sticky and price both on)", () => {
@@ -1824,7 +1824,7 @@ describe("register: the tiers subcommand", () => {
       setContext(200_000);
       setTier("opus", 0.98, 2);
       const t = await turn(hooks, $, "tf-h1a");
-      assert.notEqual(t.sent.model, "claude-fable-5-1", "fable is off; it must not be held to");
+      assert.notEqual(t.sent.model, "claude-fable-5-2", "fable is off; it must not be held to");
       assert.equal(t.sent.model, "claude-opus-5-5");
     });
 
@@ -1833,7 +1833,7 @@ describe("register: the tiers subcommand", () => {
       setContext(5_000);
       setTier("opus", 0.98, 2);
       const t = await turn(hooks, $, "tf-h1b");
-      assert.notEqual(t.sent.model, "claude-fable-5-1");
+      assert.notEqual(t.sent.model, "claude-fable-5-2");
       assert.equal(t.sent.model, "claude-opus-5-5");
     });
 
@@ -1847,7 +1847,7 @@ describe("register: the tiers subcommand", () => {
       setContext(250_000);
       setTier("haiku", 0.99, 0);
       const t = await turn(hooks, $, "tf-h1c");
-      assert.notEqual(t.sent.model, "claude-fable-5-1");
+      assert.notEqual(t.sent.model, "claude-fable-5-2");
       assert.equal(t.sent.model, "claude-sonnet-5-5");
       assert.match(t.text, /moved up only to sonnet/);
     });
@@ -1876,7 +1876,7 @@ describe("register: the tiers subcommand", () => {
       const { hooks, $, fail } = await startedOnFable();
       fail();
       const t = await turn(hooks, $, "tf-h1e");
-      assert.notEqual(t.sent.model, "claude-fable-5-1");
+      assert.notEqual(t.sent.model, "claude-fable-5-2");
       assert.doesNotMatch(t.text, /kept fable/);
     });
 
@@ -1962,7 +1962,7 @@ describe("register: the tiers subcommand", () => {
     setTier("fable", 0.95, 3);
     assert.equal((await turn(hooks, $, "tf6")).sent.model, undefined);
     await run(hooks, $, "tiers on fable");
-    assert.equal((await turn(hooks, $, "tf7")).sent.model, "claude-fable-5-1");
+    assert.equal((await turn(hooks, $, "tf7")).sent.model, "claude-fable-5-2");
   });
 
   test("JEV_ROUTER_EXCLUDE naming every tier does not leave excluded and offered disagreeing about which one it was", async () => {
@@ -2095,7 +2095,7 @@ describe("register: a conversation's first request", () => {
       { prompt: "plan it", description: "plan it", subagentType: "Plan", fork: false },
       async (e: { model?: string }) => ({ model: e.model ?? "inherit", agentId: "agent-1" }),
     );
-    assert.equal(spawn.model, "claude-fable-5-1");
+    assert.equal(spawn.model, "claude-fable-5-2");
     const step = async (id: string) => {
       let sent: { effort?: string } = {};
       await collect(
@@ -2238,7 +2238,7 @@ describe("register: one summary per reply", () => {
       }),
     );
     assert.equal(fetches(), asked, "Jev is not asked about the nudge");
-    assert.equal(sent.model, "claude-fable-5-1", "continues on the last decision");
+    assert.equal(sent.model, "claude-fable-5-2", "continues on the last decision");
     assert.equal(sent.effort, "xhigh");
     assert.equal(
       chunks.filter((c) => c.kind === "text").map((c) => c.text).join(""),
@@ -2389,10 +2389,10 @@ describe("register: a session that was already running", () => {
     setContext(300_000);
     setTier("haiku", 1, 0);
     const t = await turn(hooks, $, "w2", "what is 2+2");
-    assert.equal(t.sent.model, "claude-fable-5-1");
+    assert.equal(t.sent.model, "claude-fable-5-2");
     assert.match(t.text, /kept fable: too long for haiku \(300k\)/);
     const forced = await turn(hooks, $, "w3", "use haiku for this");
-    assert.equal(forced.sent.model, "claude-fable-5-1");
+    assert.equal(forced.sent.model, "claude-fable-5-2");
   });
 
   test("a [1m] session model is the ladder's model, spelled the engine's way", async () => {
@@ -2457,7 +2457,7 @@ describe("register: a reload of the module", () => {
     after.setContext(150_000);
     after.setTier("haiku", 0.99, 0);
     const t = await turn(after.hooks, after.$, "a2", "what is 2+2");
-    assert.equal(t.sent.model, "claude-fable-5-1", "held to the tier that is warm, not reset");
+    assert.equal(t.sent.model, "claude-fable-5-2", "held to the tier that is warm, not reset");
     assert.match(t.text, /kept fable: haiku costs/);
   });
 
@@ -2524,9 +2524,9 @@ describe("register: a reload of the module", () => {
       }),
     );
     const out = rest.filter((c) => c.kind === "text").map((c) => c.text).join("");
-    assert.equal(sent.model, "claude-fable-5-1", "still routed after the reload");
+    assert.equal(sent.model, "claude-fable-5-2", "still routed after the reload");
     assert.doesNotMatch(out, /✳️/, "the route line is not written a second time");
-    assert.match(out, /fable-5-1 ✓/, "and the reply is summarised");
+    assert.match(out, /fable-5-2 ✓/, "and the reply is summarised");
   });
 
   test("a reload mid-agent does not treat the agent's next request as its first", async () => {
@@ -2833,8 +2833,8 @@ describe("register: audit regressions (2026-09-23)", () => {
         return answeredBy(e.model);
       }),
     );
-    assert.equal(sent.model, "claude-fable-5-1");
-    assert.match(text(last), /fable-5-1 ✓/);
+    assert.equal(sent.model, "claude-fable-5-2");
+    assert.match(text(last), /fable-5-2 ✓/);
   });
 
   test("a subagent's compaction leaves the main loop alone", async () => {
@@ -2845,7 +2845,7 @@ describe("register: audit regressions (2026-09-23)", () => {
     setContext(150_000);
     setTier("haiku", 0.99, 0);
     const t = await turn(hooks, $, "s2", "2+2");
-    assert.equal(t.sent.model, "claude-fable-5-1", "still held to what is warm");
+    assert.equal(t.sent.model, "claude-fable-5-2", "still held to what is warm");
   });
 
   test("/clear saves under the new session's id, leaving the old one's intact", async () => {
@@ -3089,10 +3089,10 @@ describe("register: audit regressions (2026-09-23)", () => {
     kit.setTier("haiku", 0.99, 0);
     const t = await turn(kit.hooks, kit.$, "n2", xml);
     assert.equal(kit.fetches(), asked, "Jev was not asked about the XML");
-    assert.equal(t.sent.model, "claude-fable-5-1", "the reply's own route continues");
+    assert.equal(t.sent.model, "claude-fable-5-2", "the reply's own route continues");
     assert.doesNotMatch(t.text, /✳️/, "no second line under the open reply");
     // A task no summarised reply spawned: its wake-up is a reply of its own.
-    assert.match(t.text, /fable-5-1 ✓ xhigh/, "summarised on what answered");
+    assert.match(t.text, /fable-5-2 ✓ xhigh/, "summarised on what answered");
     assert.match((await run(kit.hooks, kit.$, "")).text, /\[task finished\] Agent "reviewer" completed/);
   });
 
@@ -3126,7 +3126,7 @@ describe("register: audit regressions (2026-09-23)", () => {
     setTier("fable", 0.97, 3);
     const t = await turn(hooks, $, "u2", "now plan the migration");
     assert.equal(t.sent.model, "claude-opus-5-5", "kept on the warm tier");
-    assert.match(t.text, /kept opus: fable costs \$5\.\d+ vs \$0\.\d+, over the \$1\.00 limit/);
+    assert.match(t.text, /kept opus: fable costs \$4\.06 vs \$0\.\d+, over the \$1\.00 limit/);
   });
 
   test("an upgrade under the limit goes through; a small context is cheap to move", async () => {
@@ -3135,7 +3135,7 @@ describe("register: audit regressions (2026-09-23)", () => {
     await turn(hooks, $, "c1", "implement it");
     setContext(20_000);
     setTier("fable", 0.97, 3);
-    assert.equal((await turn(hooks, $, "c2", "now plan the migration")).sent.model, "claude-fable-5-1");
+    assert.equal((await turn(hooks, $, "c2", "now plan the migration")).sent.model, "claude-fable-5-2");
   });
 
   test("the upgrade limit is set by JEV_ROUTER_UPGRADE_MAX, and a named tier ignores it", async () => {
@@ -3144,27 +3144,27 @@ describe("register: audit regressions (2026-09-23)", () => {
     await turn(raised.hooks, raised.$, "r1", "implement it");
     raised.setContext(250_000);
     raised.setTier("fable", 0.97, 3);
-    assert.equal((await turn(raised.hooks, raised.$, "r2", "now plan the migration")).sent.model, "claude-fable-5-1");
+    assert.equal((await turn(raised.hooks, raised.$, "r2", "now plan the migration")).sent.model, "claude-fable-5-2");
 
     const named = await boot();
     named.setTier("opus", 0.95, 2);
     await turn(named.hooks, named.$, "n1", "implement it");
     named.setContext(250_000);
-    assert.equal((await turn(named.hooks, named.$, "n2", "use fable to plan the migration")).sent.model, "claude-fable-5-1");
+    assert.equal((await turn(named.hooks, named.$, "n2", "use fable to plan the migration")).sent.model, "claude-fable-5-2");
   });
 
   test("a Jev timeout on a fable session keeps fable warm, so nothing is rewritten either way", async () => {
     const { hooks, $, setTier, setContext, fail } = await boot();
     setContext(20_000);
     setTier("fable", 0.97, 3);
-    assert.equal((await turn(hooks, $, "w1", "plan the migration")).sent.model, "claude-fable-5-1");
+    assert.equal((await turn(hooks, $, "w1", "plan the migration")).sent.model, "claude-fable-5-2");
     setContext(250_000);
     fail();
     const failed = await turn(hooks, $, "w2", "2");
-    assert.equal(failed.sent.model, "claude-fable-5-1", "no drop to the session model's cold cache");
+    assert.equal(failed.sent.model, "claude-fable-5-2", "no drop to the session model's cold cache");
     setTier("haiku", 0.99, 0);
     const t = await turn(hooks, $, "w3", "3");
-    assert.equal(t.sent.model, "claude-fable-5-1", "still priced from fable, where the cache is");
+    assert.equal(t.sent.model, "claude-fable-5-2", "still priced from fable, where the cache is");
     assert.match(t.text, /kept fable: /);
   });
 
@@ -3229,7 +3229,7 @@ describe("register: audit regressions (2026-09-23)", () => {
     await again.hooks.get("session.start")!(again.$, {}, async (e: unknown) => e);
     await again.hooks.get("classic.SessionStart")!(
       again.$,
-      { source: "resume", model: "claude-fable-5-1", context_tokens: 20_000, prompt_cache_likely_expired: true },
+      { source: "resume", model: "claude-fable-5-2", context_tokens: 20_000, prompt_cache_likely_expired: true },
       async (e: unknown) => e,
     );
     again.setContext(20_000);
@@ -3362,10 +3362,10 @@ describe("register: audit regressions (2026-09-23)", () => {
     setContext(20_000);
     setTier("fable", 0.95, 3);
     await turn(hooks, $, "eo1", "plan it");
-    await hooks.get("classic.SessionStart")!($, { source: "resume", model: "claude-fable-5-1", context_tokens: 20_000, prompt_cache_likely_expired: true }, async (e: unknown) => e);
+    await hooks.get("classic.SessionStart")!($, { source: "resume", model: "claude-fable-5-2", context_tokens: 20_000, prompt_cache_likely_expired: true }, async (e: unknown) => e);
     await run(hooks, $, "off");
     await hooks.get("turn.start")!($, { text: "carry on", turnId: "eo2" }, async (e: unknown) => e);
-    await collect(hooks.get("turn.step")!($, { turnId: "eo2", index: 0 }, () => answeredBy("claude-fable-5-1")));
+    await collect(hooks.get("turn.step")!($, { turnId: "eo2", index: 0 }, () => answeredBy("claude-fable-5-2")));
     await run(hooks, $, "on");
     setTier("haiku", 0.99, 0);
     const t = await turn(hooks, $, "eo3", "2+2");
@@ -3484,7 +3484,7 @@ describe("register: audit regressions (2026-09-23)", () => {
       kit.setContext(null);
       kit.setTier("haiku", 0.99, 0);
       const t = await turn(kit.hooks, kit.$, "cw2", "2+2");
-      assert.equal(t.sent.model, "claude-fable-5-1", "the opening of the transcript is still warm on fable");
+      assert.equal(t.sent.model, "claude-fable-5-2", "the opening of the transcript is still warm on fable");
       assert.match(t.text, /kept fable: haiku costs/);
 
       const sum = await withJev({}, { store: new Map(), id: "sess-SUM" });
@@ -3617,7 +3617,7 @@ describe("register: audit regressions (2026-09-23)", () => {
       await kit.hooks.get("session.compact")!(kit.$, compactEvent(2), async () => ({ messages: [] }));
       await collect(kit.hooks.get("turn.step")!(kit.$, { turnId: "mc1", index: 1 }, (e: { model: string }) => answeredBy(e.model)));
       const yes = await turn(kit.hooks, kit.$, "mc2", "yes");
-      assert.equal(yes.sent.model, "claude-fable-5-1", "continues the turn's decision");
+      assert.equal(yes.sent.model, "claude-fable-5-2", "continues the turn's decision");
     });
   });
 
@@ -3729,16 +3729,16 @@ describe("register: audit regressions (2026-09-23)", () => {
     setContext(150_000);
     await hooks.get("classic.SessionStart")!(
       $,
-      { source: "resume", model: "claude-fable-5-1", context_tokens: 150_000, prompt_cache_likely_expired: false },
+      { source: "resume", model: "claude-fable-5-2", context_tokens: 150_000, prompt_cache_likely_expired: false },
       async (e: unknown) => e,
     );
     await hooks.get("classic.PostModelSwitch")!(
       $,
-      { from_model: "claude-opus-5-5", to_model: "claude-fable-5-1", source: "resume" },
+      { from_model: "claude-opus-5-5", to_model: "claude-fable-5-2", source: "resume" },
       async (e: unknown) => e,
     );
     setTier("haiku", 0.99, 0);
-    assert.equal((await turn(hooks, $, "r1", "2+2")).sent.model, "claude-fable-5-1");
+    assert.equal((await turn(hooks, $, "r1", "2+2")).sent.model, "claude-fable-5-2");
   });
 
   test("a nudge that finishes a reply the person started closes it with the summary", async () => {
@@ -3758,7 +3758,7 @@ describe("register: audit regressions (2026-09-23)", () => {
     const asked = fetches();
     const t = await turn(hooks, $, "e2", "");
     assert.equal(fetches(), asked);
-    assert.equal(t.sent.model, "claude-fable-5-1");
+    assert.equal(t.sent.model, "claude-fable-5-2");
     assert.doesNotMatch(t.text, /empty prompt/);
   });
 
@@ -3803,7 +3803,7 @@ describe("register: audit regressions (2026-09-28)", () => {
     const models: string[] = [];
     const step = (index: number, ...texts: string[]) =>
       collect(
-        hooks.get("turn.step")!($, { turnId: "w1", index, model: "claude-fable-5-1" }, (e: { model: string }) => {
+        hooks.get("turn.step")!($, { turnId: "w1", index, model: "claude-fable-5-2" }, (e: { model: string }) => {
           models.push(e.model);
           return modelSays(...texts);
         }),
@@ -3869,7 +3869,7 @@ describe("register: a switch no response confirmed (2026-09-28)", () => {
       yield { kind: "stop", stopReason: null, usage: null, ref: 2 };
       return { stopReason: null };
     }
-    assert.equal((await turn("u2", "plan it", () => failedEarly())).sent, "claude-fable-5-1");
+    assert.equal((await turn("u2", "plan it", () => failedEarly())).sent, "claude-fable-5-2");
     setContext(150_000);
     setTier("haiku", 0.99, 0);
     const t = await turn("u3", "what is 2+2", (m) => answeredBy(m));
@@ -4094,7 +4094,7 @@ describe("register: round-3 audit (2026-09-29)", () => {
     let sent = "";
     await kit.hooks.get("turn.start")!(kit.$, { text: "yes", turnId: "g2" }, async (e: unknown) => e);
     await collect(kit.hooks.get("turn.step")!(kit.$, { turnId: "g2", index: 0 }, (e: { model: string }) => ((sent = e.model), answeredBy(e.model))));
-    assert.equal(sent, "claude-fable-5-1");
+    assert.equal(sent, "claude-fable-5-2");
   });
 
   test("Fable's first-request effort is for the first request only, not every step of the first turn", async () => {
@@ -4182,7 +4182,7 @@ describe("register: round-3 audit, persistence (2026-09-29)", () => {
     await b.hooks.get("turn.start")!(b.$, { text: "plan it", turnId: "x1" }, async (e: unknown) => e);
     let sent = "";
     await collect(b.hooks.get("turn.step")!(b.$, { turnId: "x1", index: 0 }, (e: { model: string }) => ((sent = e.model), answeredBy(e.model))));
-    assert.equal(sent, "claude-fable-5-1", "staying is a rewrite too, so the upgrade is not held over the limit");
+    assert.equal(sent, "claude-fable-5-2", "staying is a rewrite too, so the upgrade is not held over the limit");
   });
   test("a switch confirmed by the first streamed text is saved, even when quiet writes no line", async () => {
     const shared = { store: new Map<string, unknown>(), id: "sess-QC" };
@@ -4261,7 +4261,7 @@ describe("register: round-4 audit (2026-09-29)", () => {
     await kit.hooks.get("turn.start")!(kit.$, { text: "plan it", turnId: "z2" }, async (e: unknown) => e);
     let sent = "";
     await collect(kit.hooks.get("turn.step")!(kit.$, { turnId: "z2", index: 0 }, (e: { model: string }) => ((sent = e.model), answeredBy(e.model))));
-    assert.equal(sent, "claude-fable-5-1");
+    assert.equal(sent, "claude-fable-5-2");
   });
 
   test("an agent spawned in parallel, not listed yet, outlives completed ones past the limit", async () => {
@@ -4399,7 +4399,7 @@ describe("register: round-5 findings (2026-09-29)", () => {
     assert.ok(snap.spawned.length <= 2, `spawned ${snap.spawned.length}`);
     let sent = "";
     await collect(kit.hooks.get("turn.step")!(kit.$, { turnId: "r1s", index: 0, agentId: "routed-1" }, (e: { model: string }) => ((sent = e.model), answeredBy(e.model))));
-    assert.equal(sent, "claude-fable-5-1");
+    assert.equal(sent, "claude-fable-5-2");
   });
   test("/clear with an unreadable agent list keeps a running agent's routing", async () => {
     const kit = load();
@@ -4410,7 +4410,7 @@ describe("register: round-5 findings (2026-09-29)", () => {
     await kit.hooks.get("classic.SessionStart")!(kit.$, { source: "clear" }, async (e: unknown) => e);
     let sent = "";
     await collect(kit.hooks.get("turn.step")!(kit.$, { turnId: "a1", index: 0, agentId: "agent-1" }, (e: { model: string }) => ((sent = e.model), answeredBy(e.model))));
-    assert.equal(sent, "claude-fable-5-1");
+    assert.equal(sent, "claude-fable-5-2");
   });
   test("a claim left by a copy that died long ago does not stop an older live copy", async () => {
     const shared = { store: new Map<string, unknown>(), id: "sess-DEAD" };
@@ -4506,7 +4506,7 @@ describe("register: round-6 session driver findings (2026-09-29)", () => {
     let sent = "";
     await kit.hooks.get("turn.start")!(kit.$, { text: "next", turnId: "x2" }, async (e: unknown) => e);
     await collect(kit.hooks.get("turn.step")!(kit.$, { turnId: "x2", index: 0 }, (e: { model: string }) => ((sent = e.model), answeredBy(e.model))));
-    assert.notEqual(sent, "claude-fable-5-1");
+    assert.notEqual(sent, "claude-fable-5-2");
   });
   test("session.end saves what the throttled saves had not", async () => {
     const shared = { store: new Map<string, unknown>(), id: "sess-END" };
@@ -4753,12 +4753,12 @@ describe("register: a restored session model is checked against the engine's (20
     const env = { AI_GATEWAY_API_KEY: "gw-key", JEV_ROUTER_EXCLUDE: "fable" };
     const a = load(env, shared);
     await a.hooks.get("session.start")!(a.$, {}, async (e: unknown) => e);
-    a.setSessionModel("claude-fable-5-1");
+    a.setSessionModel("claude-fable-5-2");
     a.setContext(100_000);
-    await a.hooks.get("classic.SessionStart")!(a.$, { source: "resume", model: "claude-fable-5-1", context_tokens: 100_000 }, async (e: unknown) => e);
+    await a.hooks.get("classic.SessionStart")!(a.$, { source: "resume", model: "claude-fable-5-2", context_tokens: 100_000 }, async (e: unknown) => e);
     a.fail();
     await a.hooks.get("turn.start")!(a.$, { text: "implement cursor pagination", turnId: "p1" }, async (e: unknown) => e);
-    await collect(a.hooks.get("turn.step")!(a.$, { turnId: "p1", index: 0 }, (e: { model: string }) => answeredBy(e.model ?? "claude-fable-5-1")));
+    await collect(a.hooks.get("turn.step")!(a.$, { turnId: "p1", index: 0 }, (e: { model: string }) => answeredBy(e.model ?? "claude-fable-5-2")));
     g.__jevRouterNewest = undefined;
     g.__jevRouterLive = undefined;
     await new Promise((r) => setTimeout(r, 5));
@@ -4770,7 +4770,7 @@ describe("register: a restored session model is checked against the engine's (20
     let sent = "";
     await b.hooks.get("turn.start")!(b.$, { text: "implement cursor pagination for reports", turnId: "p2" }, async (e: unknown) => e);
     await collect(b.hooks.get("turn.step")!(b.$, { turnId: "p2", index: 0 }, (e: { model: string }) => ((sent = e.model ?? "claude-sonnet-5-5"), answeredBy(sent))));
-    assert.notEqual(sent, "claude-fable-5-1");
+    assert.notEqual(sent, "claude-fable-5-2");
   });
 });
 
@@ -4945,7 +4945,7 @@ describe("register: round-10 findings (2026-09-29)", () => {
     await kit.hooks.get("agent.spawn")!(kit.$, { tool_use_id: "tu1", prompt: "audit the code base carefully", description: "Audit", subagentType: "general-purpose", parentModel: "claude-opus-5-5", fork: false, background: true }, async (e: { model?: string }) => ({ model: e.model, agentId: "agent-c1" }));
     const step = async (turnId: string) => {
       let sent: { effort?: string } = {};
-      await collect(kit.hooks.get("turn.step")!(kit.$, { turnId, index: 0, agentId: "agent-c1", model: "claude-fable-5-1", effort: "high" }, (e: { model: string; effort?: string }) => ((sent = e), answeredBy(e.model))));
+      await collect(kit.hooks.get("turn.step")!(kit.$, { turnId, index: 0, agentId: "agent-c1", model: "claude-fable-5-2", effort: "high" }, (e: { model: string; effort?: string }) => ((sent = e), answeredBy(e.model))));
       return sent.effort;
     };
     assert.equal(await step("s1"), "xhigh");
@@ -5000,15 +5000,15 @@ describe("register: round-10 driver findings (2026-09-29)", () => {
     kit.setTier("sonnet", 0.9, 1);
     await stepOf(kit, "b0", "plan the billing architecture", "claude-haiku-5-5");
     shared.id = "sess-CA";
-    kit.setSessionModel("claude-fable-5-1");
-    await start(kit.$, { source: "resume", model: "claude-fable-5-1", context_tokens: 108_946 }, async (e: unknown) => e);
+    kit.setSessionModel("claude-fable-5-2");
+    await start(kit.$, { source: "resume", model: "claude-fable-5-2", context_tokens: 108_946 }, async (e: unknown) => e);
     shared.id = "sess-CB";
     kit.setSessionModel("claude-opus-5");
     kit.setContext(143_772);
     await start(kit.$, { source: "resume", context_tokens: 143_772 }, async (e: unknown) => e);
     kit.setTier("sonnet", 0.6, 1);
     const { sent } = await stepOf(kit, "b1", "implement cursor pagination", "claude-opus-5");
-    assert.notEqual(sent, "claude-fable-5-1");
+    assert.notEqual(sent, "claude-fable-5-2");
   });
 
   test("a reply whose first line is a long route-line look-alike still gets the route line and keeps routing", async () => {
@@ -5113,7 +5113,7 @@ describe("register: round-13 driver findings (2026-09-29)", () => {
       const shared = { store: new Map<string, unknown>(), id: "sess-R0" };
       const kit = load({ AI_GATEWAY_API_KEY: "gw-key", JEV_ROUTER_STICKY: undefined, JEV_ROUTER_EXCLUDE: "opus" }, shared);
       const start = kit.hooks.get("classic.SessionStart")!;
-      kit.setSessionModel("claude-fable-5-1");
+      kit.setSessionModel("claude-fable-5-2");
       await kit.hooks.get("session.start")!(kit.$, {}, async (e: unknown) => e);
       shared.id = "sess-RA";
       kit.setSessionModel("claude-opus-5-5[1m]");
@@ -5129,11 +5129,11 @@ describe("register: round-13 driver findings (2026-09-29)", () => {
         await turnOn(kit, "b1", "help me plan the architecture for multi-tenant billing", "claude-sonnet-5-5");
       }
       shared.id = "sess-RA";
-      kit.setSessionModel("claude-fable-5-1");
+      kit.setSessionModel("claude-fable-5-2");
       kit.setContext(null);
       await start(kit.$, { source: "resume", context_tokens: 0 }, async (e: unknown) => e);
       kit.setTier("sonnet", 0.67, 2);
-      const { sent } = await turnOn(kit, "a2", "refactor the reports module", "claude-fable-5-1");
+      const { sent } = await turnOn(kit, "a2", "refactor the reports module", "claude-fable-5-2");
       assert.ok(!sent.startsWith("claude-opus"), sent);
     });
 
@@ -5504,9 +5504,9 @@ describe("register: plan and catalog (2026-10-21)", () => {
     let sent: { model?: string } = {};
     for await (const _ of kit.hooks.get("turn.step")!(kit.$, { turnId: "f1", index: 0 }, (e: { model: string }) => {
       sent = e;
-      return answeredBy("claude-fable-5-1");
+      return answeredBy("claude-fable-5-2");
     }));
-    assert.equal(sent.model, "claude-fable-5-1");
+    assert.equal(sent.model, "claude-fable-5-2");
   });
 
   test("the catalog's offers replace the built-in ones", async () => {
@@ -5626,7 +5626,7 @@ describe("register: the model list (2026-10-21)", () => {
       listed("claude-haiku-5-5", "haiku", "2026-10-07T00:00:00Z"),
       listed("claude-sonnet-5-5", "sonnet", "2026-09-28T00:00:00Z"),
       listed("claude-opus-5-5", "opus", "2026-09-21T00:00:00Z"),
-      listed("claude-fable-5-1", "fable", "2026-09-01T00:00:00Z"),
+      listed("claude-fable-5-2", "fable", "2026-09-01T00:00:00Z"),
     ],
     has_more: false,
     last_id: null,

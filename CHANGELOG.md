@@ -12,6 +12,11 @@
 
 ### Fixes
 
+- **Fable routes to 5.2** (`claude-fable-5-2`), including without Models API
+  access. Its 1M window and $8/$40 per MTok price ($0.20 cache reads) are
+  in the built-in tables and catalog. Explicit 5.1 sessions keep their old
+  prices; the reply summary still compares the requested and returned model.
+
 - **Fable on Pro during the Fable 5.2 launch week.** With `JEV_ROUTER_PLAN=pro`,
   Fable is offered again from 9 November 2026 10:00 PT through 16 November
   23:59 PT, while Anthropic includes it in Pro's usage limits (up to half the

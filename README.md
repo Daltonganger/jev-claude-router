@@ -41,11 +41,11 @@ you type a prompt
       ↓
 turn.start   ask Jev          →  tier: fable, effort: max
       ↓      apply the checks →  window, confidence, price, ceiling
-turn.step    each request     →  model: claude-fable-5-1, effort: xhigh
+turn.step    each request     →  model: claude-fable-5-2, effort: xhigh
       ↓
 reply        > ✳️ fable · xhigh · Jev 97% · capped from max · 641ms
              …your reply…
-             fable-5-1 ✓ xhigh · Jev 97% · $0.35 · 130k in (91% cached) · 2k out
+             fable-5-2 ✓ xhigh · Jev 97% · $0.35 · 130k in (91% cached) · 2k out
 ```
 
 The four tiers:
@@ -55,7 +55,11 @@ The four tiers:
 | `haiku` | Trivial: a lookup, a rename, a yes or no. | `claude-haiku-5-5` |
 | `sonnet` | Straightforward and minor, no real decision to make. | `claude-sonnet-5-5` |
 | `opus` | Plain implementation carrying some complexity. | `claude-opus-5-5` |
-| `fable` | Planning, brainstorming, architecture, systematic debugging. | `claude-fable-5-1` |
+| `fable` | Planning, brainstorming, architecture, systematic debugging. | `claude-fable-5-2` |
+
+Fable 5.2 requires Claude Code 2.1.321 or newer. Update the plugin and start
+a new session to pick up the new default. The reply summary confirms the model
+returned by the API: `fable-5-2 ✓`; an older model answering shows a mismatch.
 
 What Jev is told each tier is for lives in `TIER_CRITERIA` in
 `hooks/policy.ts`. Editing those strings is how you change the router's
@@ -147,7 +151,7 @@ When a check changed Jev's pick, the reason is written in plain words:
 | --- | --- |
 | `kept fable: Jev 61% on haiku, needs 75%` | Jev wanted haiku but was not sure enough to switch. |
 | `kept fable: haiku costs $4.41 vs $0.13` | Moving down would have cost more than staying, cache included. |
-| `kept opus: fable costs $5.03 vs $0.080, over the $1.00 limit` | Moving up would have cost more than the upgrade limit over staying. |
+| `kept opus: fable costs $4.06 vs $0.080, over the $1.00 limit` | Moving up would have cost more than the upgrade limit over staying. |
 | `kept fable: too long for haiku (310k)` | The conversation does not fit haiku's window. |
 | `haiku too long, moved up only to sonnet (Jev wanted fable)` | The running tier outgrew its window; the turn went to the cheapest tier that fits. |
 | `capped from max` | Jev asked for more effort than the ceiling allows. |
@@ -168,11 +172,11 @@ Under each finished reply, one block reports what the API says actually
 answered and what it cost at Anthropic's list price:
 
 ```
-fable-5-1 ✓ xhigh · Jev 97% · $0.35 · 130k in (91% cached) · 2k out
+fable-5-2 ✓ xhigh · Jev 97% · $0.35 · 130k in (91% cached) · 2k out
 ```
 
 `✓` means the model that answered is the one the router asked for; a
-mismatch reads `opus-5 ⚠ asked fable-5-1`. `91% cached` is the share of
+mismatch reads `opus-5 ⚠ asked fable-5-2`. `91% cached` is the share of
 input read from the prompt cache.
 
 A reply that launched background agents spans several turns and still gets
@@ -212,11 +216,11 @@ jev-claude-router:
 
   Recent turns, newest first:
      0ms  fable·medium    [task finished] Agent "Review library-sync cluster" complet…
-          → fable-5-1 ✓ · $0.076 · 45k in (98% cached) · 1k out
+          → fable-5-2 ✓ · $0.076 · 45k in (98% cached) · 1k out
    641ms  fable·xhigh  Jev 97%; capped from max  help me plan the architecture
-          → fable-5-1 ✓ · $0.35 · 130k in (91% cached) · 2k out
+          → fable-5-2 ✓ · $0.35 · 130k in (91% cached) · 2k out
    352ms  fable·low  kept fable: haiku costs $1.02 vs $0.020  what is 2+2
-          → fable-5-1 ✓ · $0.034 · 47k in (99% cached) · 0k out
+          → fable-5-2 ✓ · $0.034 · 47k in (99% cached) · 0k out
     12ms  not routed — gateway said HTTP 403 (customer_verification_required)
 ```
 

@@ -37,11 +37,11 @@ describe("pricing", () => {
       ],
     });
     assert.deepEqual(PRICE.fable, {
-      input: 10,
-      write5m: 12.5,
-      write1h: 20,
-      read: 0.25,
-      output: 50,
+      input: 8,
+      write5m: 10,
+      write1h: 16,
+      read: 0.2,
+      output: 40,
     });
     assert.equal(PRICE.opus.read, 0.2);
     assert.equal(PRICE.sonnet.write1h, 4);
@@ -63,10 +63,18 @@ describe("pricing", () => {
     // A Haiku the page does not list is no guess at 5.5's tiered price.
     assert.equal(priceOfModel("claude-haiku-5"), null);
     assert.equal(priceOfModel("claude-haiku-5-6"), null);
-    assert.equal(priceOfModel("claude-fable-5-1"), PRICE.fable);
+    assert.equal(priceOfModel("claude-fable-5-2"), PRICE.fable);
     assert.equal(priceOfModel("claude-opus-5-5"), PRICE.opus);
     assert.equal(priceOfModel("claude-opus-5")?.read, 0.5);
     assert.equal(priceOfModel("<synthetic>"), null);
+  });
+
+  test("Fable 5.2 prices provider spellings while old Fable and Mythos keep their rates", () => {
+    for (const id of ["claude-fable-5-2", "claude-fable-5-2-20261109", "us.anthropic.claude-fable-5-2-v1:0", "claude-fable-5-2@20261109"])
+      assert.equal(priceOfModel(id), PRICE.fable, id);
+    for (const id of ["claude-fable-5-1", "claude-fable-5-1-20260901", "claude-mythos-5-1"])
+      assert.deepEqual(priceOfModel(id), { input: 10, write5m: 12.5, write1h: 20, read: 0.25, output: 50 }, id);
+    assert.equal(priceOfModel("claude-fable-5")?.read, 1);
   });
 
   test("the one-hour cache is the default, and the only other is five minutes", () => {
@@ -130,10 +138,10 @@ describe("pricing", () => {
 
   test("at a working context, a downgrade from fable never pays", () => {
     const v = switchVerdict("fable", "haiku", 200_000, 1_500);
-    // stay: 200k·0.25 + 1.5k·50 = 0.05 + 0.075 = $0.125
-    assert.equal(Math.round(v.stay * 1000) / 1000, 0.125);
-    // go: 200k·1 (haiku write, the tier past 100k) + 1.5k·2.5 + 200k·20 (fable re-write) = 0.2 + 0.00375 + 4
-    assert.equal(Math.round(v.go * 1000) / 1000, 4.204);
+    // stay: 200k·0.20 + 1.5k·40 = $0.10
+    assert.equal(Math.round(v.stay * 1000) / 1000, 0.1);
+    // go: 200k·1 (haiku write, the tier past 100k) + 1.5k·2.5 + 200k·16 (fable re-write) = 0.2 + 0.00375 + 3.2
+    assert.equal(Math.round(v.go * 1000) / 1000, 3.404);
     assert.equal(v.hold, true);
   });
 
@@ -271,7 +279,7 @@ describe("the catalog overlay", () => {
     assert.equal(priceOfModel("claude-new-1"), cheap);
     assert.equal(priceOfModel("claude-new-1-20261001"), cheap);
     assert.equal(priceOfModel("anthropic.claude-new-1-v1:0"), cheap);
-    assert.equal(priceOfModel("claude-fable-5-1"), PRICE.fable);
+    assert.equal(priceOfModel("claude-fable-5-2"), PRICE.fable);
     setOverlay(null);
     assert.equal(priceOfModel("claude-new-1"), null);
   });

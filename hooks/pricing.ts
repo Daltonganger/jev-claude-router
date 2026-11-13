@@ -1,9 +1,10 @@
 /**
  * What a turn costs, and what a switch would cost, in dollars.
  *
- * Prices are Anthropic's public list, per million tokens, read from
- * platform.claude.com/docs/en/about-claude/pricing on PRICE_DATE. A cache
- * read is a tenth of input on most models, a fortieth on Fable 5.1 and a
+ * Prices are Anthropic's public list, per million tokens: pricing docs
+ * checked 2026-10-21, with Fable 5.2 updated from Claude Code's changelog
+ * on PRICE_DATE. A cache
+ * read is a tenth of input on most models, a fortieth on Fable 5.1/5.2 and a
  * twentieth on Opus 5.5 and Sonnet 5.5; a cache write is 1.25× input for the five-minute
  * cache and 2× for the one-hour one. Claude Code writes the one-hour cache
  * (every one of 18,204 writes in a week of this machine's transcripts), so
@@ -14,7 +15,8 @@
 
 import type { Tier } from "./policy.ts";
 
-export const PRICE_DATE = "2026-10-21";
+// Fable 5.2: anthropics/claude-code CHANGELOG.md, 2.1.321 (checked 2026-11-13).
+export const PRICE_DATE = "2026-11-13";
 
 /** Dollars per million tokens. */
 export type Price = {
@@ -83,7 +85,7 @@ export const PRICE: Record<Tier, Price> = {
   },
   sonnet: { input: 2, write5m: 2.5, write1h: 4, read: 0.1, output: 10 },
   opus: { input: 4, write5m: 5, write1h: 8, read: 0.2, output: 20 },
-  fable: { input: 10, write5m: 12.5, write1h: 20, read: 0.25, output: 50 },
+  fable: { input: 8, write5m: 10, write1h: 16, read: 0.2, output: 40 },
 };
 
 /**
@@ -94,8 +96,9 @@ const OPUS_4_0: Price = { input: 15, write5m: 18.75, write1h: 30, read: 1.5, out
 const HAIKU_4_5: Price = { input: 1, write5m: 1.25, write1h: 2, read: 0.1, output: 5 };
 /** Sonnet 5 reads its cache at a tenth of input; Sonnet 5.5 at a twentieth. */
 const SONNET_5_0: Price = { input: 2, write5m: 2.5, write1h: 4, read: 0.2, output: 10 };
-/** Fable 5 and Mythos 5: Fable 5.1's price, but four times its cache read. */
-const FABLE_5_0: Price = { ...PRICE.fable, read: 1 };
+/** Older Fable/Mythos versions retain their own prices. */
+const FABLE_5_1: Price = { input: 10, write5m: 12.5, write1h: 20, read: 0.25, output: 50 };
+const FABLE_5_0: Price = { ...FABLE_5_1, read: 1 };
 
 // First match wins, so a longer id goes above the prefix it starts with.
 const OTHER_PRICE: readonly (readonly [string, Price])[] = [
@@ -113,8 +116,9 @@ const OTHER_PRICE: readonly (readonly [string, Price])[] = [
   // guess at 5.5's tiered price.
   ["claude-haiku-5-5", PRICE.haiku],
   ["claude-haiku-4", HAIKU_4_5],
-  ["claude-fable-5-1", PRICE.fable],
-  ["claude-mythos-5-1", PRICE.fable],
+  ["claude-fable-5-2", PRICE.fable],
+  ["claude-fable-5-1", FABLE_5_1],
+  ["claude-mythos-5-1", FABLE_5_1],
   ["claude-fable-5", FABLE_5_0],
   ["claude-mythos-5", FABLE_5_0],
 ];

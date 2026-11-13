@@ -388,6 +388,16 @@ describe("usage: what actually answered", () => {
     );
   });
 
+  test("Fable 5.2 is confirmed only when the returned version matches", () => {
+    const requested = { ...decision, model: "claude-fable-5-2" };
+    const matching: Attempt = { prompt: "x", ms: 1, decision: requested };
+    addUsage(matching, usageOf("claude-fable-5-2"));
+    assert.match(statusReport({ ...base, attempts: [matching] }), /fable-5-2 ✓ · \$0\.29/);
+    const older: Attempt = { prompt: "x", ms: 1, decision: requested };
+    addUsage(older, usageOf("claude-fable-5-1"));
+    assert.match(statusReport({ ...base, attempts: [older] }), /fable-5-1 ⚠ asked fable-5-2/);
+  });
+
   test("a dated id still counts as the model that was asked for", () => {
     const a: Attempt = { prompt: "x", ms: 1, decision };
     addUsage(a, usageOf("claude-fable-5-1-20260901"));

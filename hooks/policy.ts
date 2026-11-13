@@ -119,7 +119,7 @@ export const MODEL_OF: Record<Tier, string> = {
   haiku: "claude-haiku-5-5",
   sonnet: "claude-sonnet-5-5",
   opus: "claude-opus-5-5",
-  fable: "claude-fable-5-1",
+  fable: "claude-fable-5-2",
 };
 
 const BUILTIN_MODEL_OF: Record<Tier, string> = { ...MODEL_OF };

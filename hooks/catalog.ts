@@ -17,7 +17,7 @@
 import { wordingOf, type Wording } from "./wording.ts";
 import { fetchText } from "./fetchtext.ts";
 import type { HttpInitLike, HttpResponseLike } from "./jev.ts";
-import { MODEL_OF, TIERS, type PlanOffer } from "./policy.ts";
+import { MODEL_OF, TIERS, type PlanOffer, type Tier } from "./policy.ts";
 import { priceAt, type Overlay, type Price, type PriceTier } from "./pricing.ts";
 
 /** The format this module reads. A file that says a higher number is ignored. */
@@ -80,6 +80,8 @@ export type Catalog = {
   schema: number;
   updated: string;
   models: Record<string, CatalogModel>;
+  /** Curated model choices for installs without access to the Models API. */
+  defaults?: Partial<Record<Tier, string>>;
   plans: Record<string, CatalogPlan>;
   deciders: Record<string, CatalogDecider>;
   /** Confidence bars by decision model, as `barsOf` keys them: for the models whose confidence is not Jev's. */
@@ -218,6 +220,17 @@ export function parseCatalog(raw: unknown): ParseResult {
     else models[id] = model;
   }
 
+  const defaults: Partial<Record<Tier, string>> = {};
+  if (raw.defaults !== undefined) {
+    if (!isRecord(raw.defaults)) dropped.push("defaults");
+    else for (const [tier, id] of Object.entries(raw.defaults)) {
+      const model = typeof id === "string" && ID.test(id) ? models[id] : undefined;
+      if (!TIERS.includes(tier as Tier) || model?.line !== tier || model.price === undefined || model.maxInputTokens === undefined)
+        dropped.push(`default ${tier.slice(0, 60)}`);
+      else defaults[tier as Tier] = id as string;
+    }
+  }
+
   const plans: Record<string, CatalogPlan> = {};
   for (const [name, entry] of Object.entries(isRecord(raw.plans) ? raw.plans : {})) {
     const lines = isRecord(entry) ? entry.excludeLines : undefined;
@@ -269,7 +282,7 @@ export function parseCatalog(raw: unknown): ParseResult {
   }
 
   const updated = typeof raw.updated === "string" ? raw.updated.slice(0, 32) : "";
-  return { ok: true, catalog: { schema: raw.schema, updated, models, plans, deciders, bars, wordings, deciderWordings }, dropped };
+  return { ok: true, catalog: { schema: raw.schema, updated, models, defaults, plans, deciders, bars, wordings, deciderWordings }, dropped };
 }
 
 /**

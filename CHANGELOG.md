@@ -12,6 +12,13 @@
 
 ### Fixes
 
+- **Model updates without an Anthropic API key.** The catalog's `defaults`
+  selects each tier's model at session start, including on Pro and Max.
+  Defaults require a matching catalog model, price and window. Future model
+  upgrades can be published in the catalog without releasing the plugin;
+  failed refreshes use the saved catalog or built-in models. API model
+  discovery remains available when a key is set.
+
 - **Fable routes to 5.2** (`claude-fable-5-2`), including without Models API
   access. Its 1M window and $8/$40 per MTok price ($0.20 cache reads) are
   in the built-in tables and catalog. Explicit 5.1 sessions keep their old

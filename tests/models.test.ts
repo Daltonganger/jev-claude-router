@@ -310,7 +310,7 @@ describe("adoptModels", () => {
 
 describe("modelsLine", () => {
   it("says why nothing was asked, or what came back", () => {
-    assert.match(modelsLine(null, null, "no-key"), /needs ANTHROPIC_API_KEY/);
+    assert.match(modelsLine(null, null, "no-key"), /no ANTHROPIC_API_KEY/);
     assert.match(modelsLine(null, null, "off"), /JEV_ROUTER_MODEL_SYNC=0/);
     assert.match(modelsLine(null, null, "loading"), /^loading/);
     assert.strictEqual(modelsLine({ models: [], source: "fresh", notes: [] }, null, "ready"), "fetched");

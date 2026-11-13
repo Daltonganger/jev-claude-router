@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { ladderPrice, priceOfModel, sameModelAs, setOverlay, setSyncedWindows, WINDOW_TOKENS } from "../hooks/pricing.ts";
+import { ladderPrice, priceOfModel, sameModelAs, setOverlay, setSyncedWindows, windowOf, WINDOW_TOKENS } from "../hooks/pricing.ts";
 import { setEffortSupport, setLadderModels } from "../hooks/policy.ts";
 import { afterEach, beforeEach, describe, mock, test } from "node:test";
 
@@ -69,7 +69,7 @@ function load(
   const $ = {
     env: { get: async (k: string) => merged[k] },
     // Time passes only for the catalog wait, and only when the catalog is hanging.
-    clock: { sleep: (ms?: number) => (ms === CATALOG_WAIT_MS && catalogReply === "hang" ? Promise.resolve() : new Promise<never>(() => {})) },
+    clock: { sleep: (ms?: number) => (ms === CATALOG_WAIT_MS && (catalogReply === "hang" || catalogReply instanceof Promise) ? Promise.resolve() : new Promise<never>(() => {})) },
     http: {
       fetch: async (url: string, init?: { body?: string; headers?: Record<string, string> }) => {
         if (url.startsWith("https://api.anthropic.com/v1/models")) {
@@ -85,11 +85,12 @@ function load(
         if (url.includes("raw.githubusercontent.com")) {
           catalogFetches++;
           if (catalogReply === "hang") return new Promise<never>(() => {});
+          const reply = await catalogReply;
           return {
-            ok: catalogReply !== "down",
-            status: catalogReply === "down" ? 503 : 200,
+            ok: reply !== "down",
+            status: reply === "down" ? 503 : 200,
             headers: {},
-            text: JSON.stringify(catalogReply),
+            text: JSON.stringify(reply),
           };
         }
         fetches++;
@@ -5430,7 +5431,7 @@ describe("register: plan and catalog (2026-10-21)", () => {
   const report = async (kit: Awaited<ReturnType<typeof started>>) =>
     (await kit.hooks.get('command.run:{"command":"jev"}')!(kit.$, { args: "" })).text as string;
   // The catalog is applied to the pricing functions for the whole process.
-  const reset = () => setOverlay(null);
+  const reset = () => { setOverlay(null); setLadderModels(null); };
   afterEach(reset);
   // The clock outside every built-in plan offer, unless a test moves it.
   let clock = Date.UTC(2027, 0, 1);
@@ -5556,6 +5557,71 @@ describe("register: plan and catalog (2026-10-21)", () => {
     assert.match(await report(kit), /plan\s+pro, every tier covered/);
   });
 
+  const nextFable = () => file({
+    defaults: { fable: "claude-fable-5-3" },
+    models: { "claude-fable-5-3": {
+      line: "fable", maxInputTokens: 2_000_000,
+      price: { input: 6, write5m: 7.5, write1h: 12, read: 0.15, output: 30 },
+    } },
+  });
+  async function routeFable(kit: Awaited<ReturnType<typeof started>>) {
+    kit.setTier("fable", 0.99, 3);
+    await kit.hooks.get("turn.start")!(kit.$, { text: "plan the migration", turnId: "catalog-next" }, async (e: unknown) => e);
+    let sent: { model?: string } = {};
+    await collect(kit.hooks.get("turn.step")!(kit.$, { turnId: "catalog-next", index: 0 }, (e: { model: string }) => {
+      sent = e;
+      return answeredBy(e.model);
+    }));
+    return sent.model;
+  }
+
+  test("a Max login without an Anthropic API key routes to the catalog's next Fable", async () => {
+    const kit = await started({ JEV_ROUTER_CATALOG: undefined, JEV_ROUTER_PLAN: "max" }, nextFable());
+    assert.equal(kit.modelsFetches(), 0, "no authenticated Models API request");
+    assert.equal(await routeFable(kit), "claude-fable-5-3");
+    assert.equal(ladderPrice("fable").output, 30, "switch checks use the new price");
+    assert.equal(windowOf("fable"), 2_000_000, "the window follows the new model");
+    assert.match(await report(kit), /fable-5-3 ✓/);
+  });
+
+  test("a late catalog saves new defaults for the next session without switching this one", async () => {
+    let finish!: (value: unknown) => void;
+    const pending = new Promise((resolve) => { finish = resolve; });
+    const shared = { store: new Map<string, unknown>(), id: "sess-late-defaults" };
+    const first = await started({ JEV_ROUTER_CATALOG: undefined }, pending, shared);
+    assert.equal(await routeFable(first), "claude-fable-5-2");
+    finish(nextFable());
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.match(await report(first), /catalog\s+fetched/);
+    assert.equal(ladderPrice("fable").output, 40, "late metadata does not change the running model");
+    const next = await started({ JEV_ROUTER_CATALOG: undefined }, "down", { ...shared, id: "sess-next-defaults" });
+    assert.equal(next.catalogFetches(), 0, "the saved catalog answers");
+    assert.equal(await routeFable(next), "claude-fable-5-3");
+  });
+
+  test("a bad catalog default stays on the built-in model", async () => {
+    const kit = await started({ JEV_ROUTER_CATALOG: undefined }, { ...nextFable(), defaults: { fable: "unpriced-model" } });
+    assert.equal(await routeFable(kit), "claude-fable-5-2");
+    assert.match(await report(kit), /ignored default fable/);
+  });
+
+  test("turning the catalog off keeps built-in models even when new defaults are published", async () => {
+    const kit = await started({ JEV_ROUTER_CATALOG: "0" }, nextFable());
+    assert.equal(kit.catalogFetches(), 0);
+    assert.equal(await routeFable(kit), "claude-fable-5-2");
+  });
+
+  test("saved catalog defaults still route without a key when a refresh fails", async () => {
+    const shared = { store: new Map<string, unknown>(), id: "sess-defaults" };
+    await started({ JEV_ROUTER_CATALOG: undefined }, nextFable(), shared);
+    clock += 7 * 3_600_000;
+    const offline = await started({ JEV_ROUTER_CATALOG: undefined }, "down", shared);
+    assert.equal(offline.catalogFetches(), 1);
+    assert.equal(offline.modelsFetches(), 0);
+    assert.equal(await routeFable(offline), "claude-fable-5-3");
+    assert.match(await report(offline), /saved copy, the fetch failed/);
+  });
+
   test("the catalog's prices reach the cost line", async () => {
     const kit = await started(
       { JEV_ROUTER_CATALOG: undefined },
@@ -5671,7 +5737,7 @@ describe("register: the model list (2026-10-21)", () => {
   test("without ANTHROPIC_API_KEY nothing is asked, and /jev says what to do", async () => {
     const kit = await started({}, current());
     assert.equal(kit.modelsFetches(), 0);
-    assert.match(await report(kit), /models\s+not synced: needs ANTHROPIC_API_KEY/);
+    assert.match(await report(kit), /models\s+API list not queried \(no ANTHROPIC_API_KEY\)/);
   });
 
   test("with a key the list is fetched once, from api.anthropic.com, with that key", async () => {
@@ -5690,6 +5756,24 @@ describe("register: the model list (2026-10-21)", () => {
   test("a key that cannot go in a header is not sent", async () => {
     const kit = await started({ ANTHROPIC_API_KEY: "sk bad\nkey" }, current());
     assert.equal(kit.modelsFetches(), 0);
+  });
+
+  test("API adoption preserves another tier's catalog default", async () => {
+    const catalog = {
+      ...catalogWithOpus6,
+      defaults: { fable: "claude-fable-5-3" },
+      models: { ...catalogWithOpus6.models, "claude-fable-5-3": {
+        line: "fable", maxInputTokens: 1_000_000,
+        price: { input: 6, write5m: 7.5, write1h: 12, read: 0.15, output: 30 },
+      } },
+    };
+    const kit = await started({ ANTHROPIC_API_KEY: "sk-ant-test", JEV_ROUTER_CATALOG: undefined }, withNewOpus(), catalog);
+    kit.setTier("fable", 0.99, 3);
+    assert.equal((await turn(kit, "catalog-fable")).model, "claude-fable-5-3");
+    // A fresh small context lets the API-discovered Opus through too.
+    kit.setContext(100);
+    kit.setTier("opus", 0.99, 3);
+    assert.equal((await turn(kit, "api-opus")).model, "claude-opus-6");
   });
 
   test("a newer opus with a price is the opus tier from the first turn, and later it is a switch like any other", async () => {

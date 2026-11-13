@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "updated": "2026-11-13",
-  "note": "Mirrors the plugin's built-in tables (pricing.ts, policy.ts) as of 'updated'. Edit here to change prices, windows or plans for every install without a new release. Pro excluding fable is the router's default, not something Anthropic requires: on Pro, Fable runs on usage credits, except while one of the plan's offers holds (from/until, ISO dates), when its lines are offered again. bars: measured on one person's 153 labelled prompts (2026-10-21, fable off); see docs/WERKDOCUMENT.md before relying on one. wordings/deciderWordings: other wording of the tier question, by decision model (keyed as bars); the plugin ships sonnet-wider and assigns none by default.",
+  "note": "Mirrors the plugin's built-in tables (pricing.ts, policy.ts) as of 'updated'. Edit here to change prices, windows or plans for every install without a new release. Pro excluding fable is the router's default, not something Anthropic requires: on Pro, Fable runs on usage credits, except while one of the plan's offers holds (from/until, ISO dates), when its lines are offered again. bars: measured on one person's 153 labelled prompts (2026-10-21, fable off); see docs/WERKDOCUMENT.md before relying on one. wordings/deciderWordings: other wording of the tier question, by decision model (keyed as bars); the plugin ships sonnet-wider and assigns none by default. defaults: current model per tier, adopted at session start even without an Anthropic API key; each must name a model with a matching line, price and window.",
   "models": {
     "claude-haiku-5-5": {
       "line": "haiku",
@@ -100,5 +100,11 @@
     "perplexity/pplx-decider-v1.2": 0.5
   },
   "wordings": {},
-  "deciderWordings": {}
+  "deciderWordings": {},
+  "defaults": {
+    "haiku": "claude-haiku-5-5",
+    "sonnet": "claude-sonnet-5-5",
+    "opus": "claude-opus-5-5",
+    "fable": "claude-fable-5-2"
+  }
 }

@@ -501,19 +501,21 @@ async function startModels(
 
 /**
  * Puts the catalog and the model list into effect, in an order that lets each
- * use the other: prices by id first, so the list can tell which newer models
- * are priced; then the ladder's models, windows and efforts from the list;
+ * use the other: catalog defaults first (also without an API key), then
+ * prices by id so the list can tell which newer models are priced; then the
+ * ladder's models, windows and efforts from the list;
  * then the catalog again, so the ladder's prices follow the models it now has.
  */
 function applySync(catalog: Catalog | null, models: ModelInfo[] | null, state: Settings["models"]): void {
-  setLadderModels(null);
+  const defaults = catalog?.defaults ?? {};
+  setLadderModels(defaults);
   setSyncedWindows(null);
   setEffortSupport(null);
   setOverlay(catalog === null ? null : overlayOf(catalog));
   if (models !== null) {
     const adoption = adoptModels(models, { ...MODEL_OF }, (id) => priceOfModel(id) !== null);
     state.adoption = adoption;
-    setLadderModels(adoption.models);
+    setLadderModels({ ...defaults, ...adoption.models });
     setSyncedWindows(adoption.windows);
     setEffortSupport(adoption.efforts);
     if (catalog !== null) setOverlay(overlayOf(catalog));

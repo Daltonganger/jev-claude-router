@@ -536,13 +536,24 @@ flattered by them, so choose on one set and confirm on another that shares nothi
 
 **Catalog**
 
-Prices, windows and what each plan covers are kept in `catalog.json` in this
+Model defaults, prices, windows and what each plan covers are kept in `catalog.json` in this
 repo, fetched at session start and saved, so a change there reaches every
 install without a new release. The built-in tables answer for anything the
 catalog does not list, or when it cannot be fetched. A session start waits at
 most 0.8 s for it; a slower fetch finishes in the background and is used from
 the next session. A price that moved more than 4× between two copies is
 reported in `/jev`.
+
+The catalog's `defaults` maps each tier to its current model ID. These choices
+apply at session start without `ANTHROPIC_API_KEY`, including on Pro and Max.
+Each choice must refer to a model in the same catalog with the matching `line`,
+an explicit price and a context window; invalid choices are ignored. To roll
+out a future model, add its metadata under `models` and update `defaults` on
+GitHub. Existing installs pick it up when their catalog cache refreshes (six
+hours by default), without a plugin release. A failed refresh uses the last
+good catalog, or the built-in choices when no saved copy exists. A catalog
+arriving after the startup wait updates prices but applies new model choices
+from the next session, preserving the running session's cache.
 
 | Variable | Default | Effect |
 | --- | --- | --- |
@@ -562,8 +573,9 @@ it is out and the router stays on the model it has. Moving to it mid-session is
 a model switch like any other, so the price check can hold it. The list is
 asked at session start with the catalog and shares its 0.8 s wait; a list that
 comes in later is saved for the next session and changes nothing in this one.
-Without a key (a Pro or Max login has none) nothing is asked and `catalog.json`
-covers the models.
+Without a key, the authenticated Models API is not called. The catalog still
+updates model choices as described above; the API additionally discovers newer
+models and supplies supported efforts when a key is available.
 
 | Variable | Default | Effect |
 | --- | --- | --- |

@@ -53,6 +53,23 @@ describe("parseCatalog", () => {
     assert.strictEqual(c.deciders.jev?.latest, "jev-1.14.0");
   });
 
+  it("accepts defaults only with a matching line, explicit price and window", () => {
+    const model = { line: "fable", price: P, maxInputTokens: 1_000_000 };
+    const raw = { ...file(), models: { "claude-fable-5-3": model }, defaults: { fable: "claude-fable-5-3" } };
+    assert.deepStrictEqual(parsed(raw).defaults, { fable: "claude-fable-5-3" });
+    for (const defaults of [null, [], "fable", { fable: "missing" }, { opus: "claude-fable-5-3" }, { other: "claude-fable-5-3" }, { fable: 123 }]) {
+      const r = parseCatalog({ ...raw, defaults });
+      assert.ok(r.ok);
+      assert.deepStrictEqual(r.catalog.defaults, {});
+      assert.ok(r.dropped.length > 0);
+      assert.ok(r.catalog.models["claude-fable-5-3"], "the valid model survives");
+    }
+    for (const incomplete of [{ line: "fable", price: P }, { line: "fable", maxInputTokens: 1_000_000 }, { ...model, price: { ...P, input: -1 } }]) {
+      assert.deepStrictEqual(parsed({ ...raw, models: { "claude-fable-5-3": incomplete } }).defaults, {});
+    }
+    assert.deepStrictEqual(parsed(file()).defaults, {}, "older catalogs remain valid");
+  });
+
   it("refuses what is not a catalog, and a newer format", () => {
     for (const raw of [null, [], "x", 3, {}, { schema: 0 }, { schema: 1.5 }, { schema: "1" }])
       assert.strictEqual(parseCatalog(raw).ok, false);
@@ -413,6 +430,10 @@ describe("catalog.json in the repo", () => {
       assert.deepStrictEqual(model.price, flat);
       assert.deepStrictEqual(model.priceTiers ?? [], tiers ?? []);
     }
+  });
+
+  it("publishes the current default for every tier", () => {
+    assert.deepStrictEqual(catalog.defaults, MODEL_OF);
   });
 
   it("has a plan for each of pro, max and api", () => {

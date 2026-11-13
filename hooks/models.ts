@@ -292,7 +292,7 @@ export function adoptModels(
 export function modelsLine(result: ModelsResult | null, adoption: Adoption | null, state: "loading" | "no-key" | "off" | "ready"): string {
   if (state === "off") return "off (JEV_ROUTER_MODEL_SYNC=0)";
   if (state === "no-key")
-    return "not synced: needs ANTHROPIC_API_KEY (the list is an API call; a Pro or Max login has no key). catalog.json covers the models.";
+    return "API list not queried (no ANTHROPIC_API_KEY); model defaults come from catalog.json, or the built-in table when unavailable.";
   if (state === "loading" || result === null) return "loading (the built-in tables answer until it is in)";
   const how =
     result.source === "fresh"
